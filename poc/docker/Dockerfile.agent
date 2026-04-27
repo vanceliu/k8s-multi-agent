@@ -1,0 +1,23 @@
+FROM python:3.13-slim
+
+WORKDIR /app
+
+# System deps (curl for healthcheck, Node.js + npm for document skills, CJK fonts for matplotlib)
+RUN apt-get update && apt-get install -y curl nodejs npm fonts-noto-cjk && rm -rf /var/lib/apt/lists/*
+
+# Python deps
+COPY poc/requirements.txt /app/poc/requirements.txt
+RUN pip install --no-cache-dir -r /app/poc/requirements.txt
+
+# Pre-install common data analysis packages (avoid agent wasting tool calls on pip install)
+RUN pip install --no-cache-dir matplotlib pandas numpy openpyxl
+
+# Application code
+COPY poc/ /app/poc/
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+EXPOSE 8080
+
+CMD ["python", "-m", "poc.agent.main"]

@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator
+  namespace: agent-platform
+  labels:
+    app: k8s-agent-platform
+    component: orchestrator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: k8s-agent-platform
+      component: orchestrator
+  template:
+    metadata:
+      labels:
+        app: k8s-agent-platform
+        component: orchestrator
+    spec:
+      serviceAccountName: orchestrator-sa
+      containers:
+      - name: orchestrator
+        image: localhost/k8s-orchestrator:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        env:
+        - name: DATABASE_URL
+          value: "postgresql+asyncpg://postgres:REDACTED@host.docker.internal:5432/claw_data"
+        - name: K8S_NAMESPACE
+          value: "agent-platform"
+        - name: AGENT_IMAGE
+          value: "localhost/k8s-agent-runtime:latest"
+        - name: IDLE_TIMEOUT_MINUTES
+          value: "10"
+        - name: REAP_CHECK_INTERVAL_SECONDS
+          value: "30"
+        - name: TERMINATION_GRACE_PERIOD
+          value: "30"
+        - name: POD_RESTART_POLICY
+          value: "OnFailure"
+        - name: STORAGE_SERVICE_HOST
+          value: "http://storage-service.agent-platform.svc.cluster.local"
+        - name: POC_ADMIN_TOKEN
+          value: "REDACTED_ADMIN_TOKEN"
+        - name: POD_CPU_REQUEST
+          value: "100m"
+        - name: POD_CPU_LIMIT
+          value: "500m"
+        - name: POD_MEMORY_REQUEST
+          value: "256Mi"
+        - name: POD_MEMORY_LIMIT
+          value: "1Gi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readiness
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orchestrator
+  namespace: agent-platform
+  labels:
+    app: k8s-agent-platform
+    component: orchestrator
+spec:
+  type: ClusterIP
+  selector:
+    app: k8s-agent-platform
+    component: orchestrator
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP

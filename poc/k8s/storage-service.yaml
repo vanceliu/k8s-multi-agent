@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: storage-service
+  namespace: agent-platform
+  labels:
+    app: k8s-agent-platform
+    component: storage-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: k8s-agent-platform
+      component: storage-service
+  template:
+    metadata:
+      labels:
+        app: k8s-agent-platform
+        component: storage-service
+    spec:
+      serviceAccountName: orchestrator-sa
+      containers:
+      - name: storage-service
+        image: localhost/k8s-storage-service:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8091
+          protocol: TCP
+        env:
+        - name: DATABASE_URL
+          value: "postgresql+asyncpg://postgres:REDACTED@host.docker.internal:5432/claw_data"
+        - name: K8S_NAMESPACE
+          value: "agent-platform"
+        - name: POC_STATIC_TOKEN
+          value: "REDACTED_USER_TOKEN"
+        - name: POC_ADMIN_TOKEN
+          value: "REDACTED_ADMIN_TOKEN"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8091
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8091
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: storage-service
+  namespace: agent-platform
+  labels:
+    app: k8s-agent-platform
+    component: storage-service
+spec:
+  type: ClusterIP
+  selector:
+    app: k8s-agent-platform
+    component: storage-service
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8091
+    protocol: TCP

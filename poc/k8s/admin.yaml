@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: admin
+  namespace: agent-platform
+  labels:
+    app: k8s-agent-platform
+    component: admin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: k8s-agent-platform
+      component: admin
+  template:
+    metadata:
+      labels:
+        app: k8s-agent-platform
+        component: admin
+    spec:
+      containers:
+      - name: admin
+        image: localhost/k8s-admin:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8090
+          protocol: TCP
+        env:
+        - name: ORCHESTRATOR_HOST
+          value: "http://orchestrator.agent-platform.svc.cluster.local"
+        - name: STORAGE_SERVICE_HOST
+          value: "http://storage-service.agent-platform.svc.cluster.local"
+        - name: POC_ADMIN_TOKEN
+          value: "REDACTED_ADMIN_TOKEN"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8090
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8090
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: admin
+  namespace: agent-platform
+  labels:
+    app: k8s-agent-platform
+    component: admin
+spec:
+  type: ClusterIP
+  selector:
+    app: k8s-agent-platform
+    component: admin
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8090
+    protocol: TCP

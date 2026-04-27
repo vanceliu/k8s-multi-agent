@@ -1,0 +1,12 @@
+FROM python:3.13-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir fastapi uvicorn sqlalchemy asyncpg greenlet kubernetes httpx \
+    langgraph-checkpoint-postgres "psycopg[binary]>=3.2.0"
+
+COPY poc/ /app/poc/
+
+EXPOSE 8080
+
+CMD ["uvicorn", "poc.orchestrator.main:app", "--host", "0.0.0.0", "--port", "8080"]
