@@ -98,6 +98,12 @@ class AgentConfig:
         default_factory=lambda: int(os.getenv("AGENT_RECURSION_LIMIT", "50"))
     )
 
+    # Display mode: "normal" (content only) or "full_history" (content + tool_call + tool_result)
+    # Controls both streaming SSE output and history retrieval
+    display_mode: str = field(
+        default_factory=lambda: os.getenv("AGENT_DISPLAY_MODE", "normal")
+    )
+
     # Shared workspaces mount base path
     shared_base_path: str = field(
         default_factory=lambda: os.getenv("SHARED_BASE_PATH", "/shared")

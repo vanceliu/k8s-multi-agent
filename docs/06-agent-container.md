@@ -515,6 +515,12 @@ class AgentConfig:
         default_factory=lambda: int(os.getenv("AGENT_RECURSION_LIMIT", "10"))
     )
 
+    # Display mode: "normal" (content only) or "full_history" (content + tool_call + tool_result)
+    # Controls both streaming SSE output and history retrieval
+    display_mode: str = field(
+        default_factory=lambda: os.getenv("AGENT_DISPLAY_MODE", "normal")
+    )
+
     # Shared workspaces mount base path
     shared_base_path: str = field(
         default_factory=lambda: os.getenv("SHARED_BASE_PATH", "/shared")
@@ -1088,97 +1094,18 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "agent_workspaces"
 
 ## 6. 自訂工具
 
-### 6.1 業務工具定義
+Agent 容器的工具設計（分組策略、沙箱機制、外部 API 整合）獨立於 [09-Agent 工具](./09-agent-tools.md)。
 
-```python
-# app/agent/tools.py
-import asyncio
-import logging
-from typing import Annotated
+**工具架構摘要**：
 
-import httpx
-from langchain_core.tools import tool
-
-from app.agent.backends.s3 import S3Backend
-
-logger = logging.getLogger(__name__)
-
-
-def get_workspace_tools(
-    s3_backend: S3Backend,
-    user_id: str,
-    orchestrator_url: str,
-) -> list:
-    """回傳 Deep Agent 可用的自訂工具清單（S3 後端）。"""
-
-    @tool
-    def notify_orchestrator_activity(session_id: str) -> str:
-        """通知 Orchestrator 更新 session 活動時間戳。
-        在執行耗時任務後呼叫，避免被誤判為閒置。"""
-        async def _notify():
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                await client.post(
-                    f"{orchestrator_url}/api/v1/orchestrator/activity",
-                    json={"user_id": user_id, "session_id": session_id},
-                )
-        try:
-            asyncio.get_event_loop().run_until_complete(_notify())
-            return "Activity reported"
-        except Exception as e:
-            return f"Failed: {e}"
-
-    @tool
-    async def list_workspace_files(
-        path: Annotated[str, "相對於工作區根目錄的路徑，例如 'data/'"] = "data/",
-    ) -> str:
-        """列出工作區指定目錄下的檔案（S3）。"""
-        try:
-            items = await s3_backend.ls(path)
-            if not items:
-                return "（空目錄）"
-            lines = []
-            for it in items:
-                kind = "[DIR]" if it["type"] == "dir" else "     "
-                size = it.get("size", "-")
-                lines.append(f"{kind} {it['name']} ({size})")
-            return "\n".join(lines)
-        except Exception as e:
-            return f"錯誤：{e}"
-
-    @tool
-    async def read_workspace_file(
-        path: Annotated[str, "相對於工作區根目錄的檔案路徑"],
-    ) -> str:
-        """讀取工作區內的檔案內容（S3）。"""
-        try:
-            return await s3_backend.read_file(path)
-        except Exception as e:
-            return f"讀取失敗：{e}"
-
-    @tool
-    async def write_workspace_file(
-        path: Annotated[str, "相對於工作區根目錄的檔案路徑"],
-        content: Annotated[str, "要寫入的內容"],
-    ) -> str:
-        """將內容寫入工作區內的檔案（S3）。"""
-        try:
-            await s3_backend.write_file(path, content)
-            return f"已寫入 {path}（{len(content)} 字元）"
-        except Exception as e:
-            return f"寫入失敗：{e}"
-
-    return [
-        notify_orchestrator_activity,
-        list_workspace_files,
-        read_workspace_file,
-        write_workspace_file,
-    ]
+```
+Supervisor
+├── research_agent → duckduckgo_search, taiwan_weather (CWA API)
+├── code_agent     → terminal (sandboxed shell), python_repl (sandboxed REPL)
+└── common         → notify_orchestrator_activity
 ```
 
-> **POC 實作差異**：POC 版本使用 `SandboxedShellTool` 和 `SandboxedPythonREPLTool` 取代 S3 檔案工具，
-> 提供 workspace 邊界硬限制（cwd 強制為 session 目錄、escape pattern 攔截、open() patch）。
-> Per-session agent cache 確保每個 session 的 tools 綁定到 `sessions/{session_id}/` 目錄。
-> Production 版本應在 S3Backend 層面實作同等的 session 隔離。
+詳見 [09-agent-tools.md](./09-agent-tools.md)。
 
 ---
 

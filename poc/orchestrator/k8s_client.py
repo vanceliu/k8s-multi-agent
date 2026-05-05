@@ -9,12 +9,15 @@ from kubernetes.client.exceptions import ApiException
 
 from poc.utils.config import (
     AGENT_DEBUG,
+    AGENT_DISPLAY_MODE,
     AGENT_IMAGE,
     AGENT_MODEL,
     AGENT_MODEL_PROVIDER,
     AGENT_PORT,
     CLEANUP_JOB_IMAGE,
     CLEANUP_JOB_TTL_SECONDS,
+    CWA_API_BASE,
+    CWA_API_KEY,
     DEFAULT_CPU_LIMIT,
     DEFAULT_CPU_REQUEST,
     DEFAULT_MEMORY_LIMIT,
@@ -204,6 +207,9 @@ class K8sClient:
                             client.V1EnvVar(name="SUB_AGENT_API_BASE", value=SUB_AGENT_API_BASE),
                             client.V1EnvVar(name="SUB_AGENT_API_KEY", value=SUB_AGENT_API_KEY),
                             client.V1EnvVar(name="AGENT_DEBUG", value=str(AGENT_DEBUG)),
+                            client.V1EnvVar(name="AGENT_DISPLAY_MODE", value=AGENT_DISPLAY_MODE),
+                            client.V1EnvVar(name="CWA_API_BASE", value=CWA_API_BASE),
+                            client.V1EnvVar(name="CWA_API_KEY", value=CWA_API_KEY),
                             client.V1EnvVar(
                                 name="AGENT_DATABASE_URL",
                                 value="postgresql://postgres:REDACTED@host.docker.internal:5432/claw_data",

@@ -212,6 +212,7 @@
 - [06-Agent 容器](./docs/06-agent-container.md) - LangChain Deep Agents runtime、FastAPI HTTP、MCP 相容、三層記憶架構
 - [07-部署指南](./docs/07-deployment.md) - 本地開發、Helm 部署、監控與日誌
 - [08-故障恢復](./docs/08-fault-recovery.md) - 異常情況處理、重試策略、災難恢復
+- [09-Agent 工具](./docs/09-agent-tools.md) - 工具分組、沙箱機制、CWA 氣象查詢、新增工具指南
 - [前端串接 API](./docs/frontend-api.md) - 前端串接完整 API 文件
 
 ## 快速開始（POC）
@@ -309,7 +310,7 @@ KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name agent-poc
 dbt-openclaw/
 ├── README.md                          # 本文件
 ├── CLAUDE.md                          # Claude Code 指引
-├── docs/                              # 設計文檔（01-08）+ 前端 API 文件
+├── docs/                              # 設計文檔（01-09）+ 前端 API 文件
 │   ├── 01-requirements-spec.md
 │   ├── 02-api-design.md
 │   ├── 03-data-model.md
@@ -318,6 +319,7 @@ dbt-openclaw/
 │   ├── 06-agent-container.md
 │   ├── 07-deployment.md
 │   ├── 08-fault-recovery.md
+│   ├── 09-agent-tools.md             # Agent 工具（分組、沙箱、CWA 氣象、新增指南）
 │   └── frontend-api.md               # 前端串接 API 文件
 ├── poc/                               # POC 實作（已驗證）
 │   ├── gateway/
@@ -348,7 +350,7 @@ dbt-openclaw/
 │   │   ├── config.py                  # AgentConfig dataclass
 │   │   ├── runtime.py                 # DeepAgentsRuntime（LangGraph ReAct）
 │   │   ├── http_server.py             # FastAPI HTTP 層（chat/files/mcp）
-│   │   ├── tools.py                   # SandboxedShellTool, SandboxedPythonREPLTool
+│   │   ├── tools.py                   # SandboxedShellTool, SandboxedPythonREPLTool, LoggingSearchTool, CWAWeatherTool
 │   │   ├── skills/                    # 內建 skill 定義
 │   │   │   ├── daily-summary/         # 每日活動摘要
 │   │   │   ├── docx/                  # Word 文件產生
@@ -360,7 +362,7 @@ dbt-openclaw/
 │   ├── db/
 │   │   ├── models.py                  # 6 張表 ORM（含 workspace_members）
 │   │   └── session.py                 # PostgreSQL async session
-│   ├── utils/config.py                # 設定（env vars）
+│   ├── utils/config.py                # 設定（env vars, 含 CWA_API_KEY/CWA_API_BASE/AGENT_DISPLAY_MODE）
 │   ├── docker/
 │   │   ├── Dockerfile.agent
 │   │   ├── Dockerfile.orchestrator
@@ -518,5 +520,7 @@ ChannelManager 偵測 Agent 不可達
 - ✅ Multi-Workspace 支援（personal/group workspace_type, Admin 預建 group workspace, Pod 自動掛載 personal + group PVC）
 - ✅ workspace_members 表（owner/admin/member/readonly 角色，控制 shared workspace 掛載權限）
 - ✅ NetworkPolicy（agent→gateway+storage-service ingress, orchestrator→gateway+admin+storage-service+agent ingress, storage-service→gateway+orchestrator+admin ingress）
+- ✅ 台灣氣象查詢工具（CWAWeatherTool，中央氣象署開放資料 API，整合至 research_agent，支援 36h/一週預報、即時觀測、即時雨量）
+- ✅ SSE Display Mode（`AGENT_DISPLAY_MODE`：`normal` 僅 content，`full_history` 含 tool_call/tool_result 事件）
 
 詳見各文檔與 [前端串接 API 文件](./docs/frontend-api.md)。

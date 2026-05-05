@@ -185,9 +185,17 @@ def create_app(runtime: DeepAgentsRuntime) -> FastAPI:
                         )
                         yield f"event: tool_result\ndata: {data}\n\n"
 
-                        # Detect file outputs and emit file events
+                    # File detection from tool output (emitted in both normal and full_history modes)
+                    if event_type == "tool_output_for_files":
                         files = _extract_files(event.get("content", ""))
+                        ws_prefix = runtime.config.workspace_path.rstrip("/") + "/"
                         for filepath in files:
+                            # Strip absolute workspace path to relative
+                            if filepath.startswith(ws_prefix):
+                                filepath = filepath[len(ws_prefix):]
+                            elif filepath.startswith("/"):
+                                # Unknown absolute path, skip
+                                continue
                             if not filepath.startswith("sessions/"):
                                 filepath = f"sessions/{req.session_id}/{filepath}"
                             ext = Path(filepath).suffix.lower()

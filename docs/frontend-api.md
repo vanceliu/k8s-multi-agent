@@ -350,6 +350,75 @@ GET /api/v1/sessions/{session_id}/messages
 | messages[].files[].name | 檔案名稱 |
 | total | 訊息總數 |
 
+### 從 Session History 下載檔案/圖片
+
+當 messages 回傳中包含 `files` 欄位時，前端需要組合正確的下載 URL 來顯示圖片或提供下載連結。
+
+**下載 URL 格式：**
+```
+GET /workspaces/{workspace_id}/api/v1/files/download?path={file.path}
+```
+
+**重要事項：**
+- 必須使用 `files[].path`（完整相對路徑，如 `sessions/sess-001/chart.png`），**不是** `files[].name`（僅檔名）
+- 必須帶上 `workspace_id`（從 session 列表 API 或 ensure 回傳取得）
+- 需要 Agent Pod 在線才能下載（Pod 離線時改用 Storage Service 端點）
+
+**兩種下載端點：**
+
+| 端點 | 條件 | 說明 |
+|------|------|------|
+| `GET /workspaces/{wid}/api/v1/files/download?path=...` | Pod 在線 | 直接 proxy 到 Agent Pod |
+| `GET /api/v1/workspaces/{wid}/storage/files/download?path=...` | Pod 在線或離線 | 透過 Storage Service（Pod 在線 proxy，離線走 K8s Job） |
+
+> 建議前端統一使用 Storage Service 端點（`/api/v1/workspaces/{wid}/storage/files/download`），因為它在 Pod 離線時仍可存取檔案。
+
+**前端範例（顯示歷史中的圖片）：**
+```javascript
+// 從 session 列表取得 workspace_id
+const sessions = await fetch(`${baseUrl}/api/v1/sessions`, { headers });
+const workspaceId = sessions.sessions[0].workspace_id; // e.g. "ws-testuser1"
+
+// 取得對話歷史
+const history = await fetch(
+  `${baseUrl}/api/v1/sessions/${sessionId}/messages`,
+  { headers }
+);
+
+// 渲染訊息中的檔案
+for (const msg of history.messages) {
+  if (msg.files) {
+    for (const file of msg.files) {
+      // 使用 file.path（完整路徑），不是 file.name（僅檔名）
+      const downloadUrl = `${baseUrl}/api/v1/workspaces/${workspaceId}/storage/files/download?path=${encodeURIComponent(file.path)}`;
+
+      if (file.type === 'image') {
+        // 顯示圖片
+        const img = document.createElement('img');
+        img.src = downloadUrl;
+        img.alt = file.name;
+        chatContainer.appendChild(img);
+      } else {
+        // 顯示下載連結
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = file.name;
+        a.textContent = `📎 ${file.name}`;
+        chatContainer.appendChild(a);
+      }
+    }
+  }
+}
+```
+
+**常見錯誤：**
+
+| 問題 | 原因 | 修正 |
+|------|------|------|
+| URL 出現 `/workspaces//api/v1/files/download` | workspace_id 為空 | 確保從 sessions API 取得 workspace_id |
+| 404 File not found | 使用了 `file.name` 而非 `file.path` | 改用 `file.path`（含 `sessions/{sid}/` 前綴） |
+| 502 Cannot reach agent pod | Pod 已被回收 | 改用 Storage Service 端點，或先 ensure workspace |
+
 **錯誤處理：**
 - `404` — Session 不存在或無對話紀錄
 
@@ -502,11 +571,17 @@ POST /workspaces/{workspace_id}/api/v1/chat/stream
 | Event | Data 格式 | 說明 |
 |-------|----------|------|
 | `content` | `{"content": "文字片段"}` | AI 回應文字（token-by-token） |
-| `tool_call` | `{"name": "工具名", "args": {...}}` | AI 請求呼叫工具 |
-| `tool_result` | `{"tool_name": "工具名", "content": "結果"}` | 工具執行結果 |
+| `tool_call` | `{"name": "工具名", "args": {...}}` | AI 請求呼叫工具（僅 `full_history` 模式） |
+| `tool_result` | `{"tool_name": "工具名", "content": "結果"}` | 工具執行結果（僅 `full_history` 模式） |
 | `file` | `{"path": "相對路徑", "type": "image\|document", "name": "檔名"}` | 工具產生的檔案（圖片、文件等） |
 | `error` | `{"error": "錯誤訊息"}` | Agent 錯誤（recursion limit、LLM 連線失敗等） |
 | *(無 event)* | `[DONE]` | 串流結束 |
+
+> **Display Mode**：後端環境變數 `AGENT_DISPLAY_MODE` 控制 `tool_call` / `tool_result` 事件是否輸出。
+> - `normal`（預設）：僅 `content` + `file` + `error`
+> - `full_history`：額外輸出 `tool_call` + `tool_result`
+>
+> 前端應同時處理兩種模式（有 tool 事件時顯示，無時忽略）。此設定同時影響 `/api/v1/sessions/{sid}/messages` 回傳的歷史訊息。
 
 ### `event: file` 說明
 

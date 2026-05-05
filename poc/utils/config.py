@@ -60,6 +60,10 @@ POD_RESTART_POLICY = os.getenv("POD_RESTART_POLICY", "OnFailure")
 CLEANUP_JOB_IMAGE = os.getenv("CLEANUP_JOB_IMAGE", "busybox:latest")
 CLEANUP_JOB_TTL_SECONDS = int(os.getenv("CLEANUP_JOB_TTL_SECONDS", "60"))
 
+# CWA (Central Weather Administration) Open Data API
+CWA_API_BASE = os.getenv("CWA_API_BASE", "https://opendata.cwa.gov.tw/api/v1/rest/datastore")
+CWA_API_KEY = os.getenv("CWA_API_KEY", "REDACTED_CWA_KEY")
+
 # Agent Debug
 AGENT_DEBUG = os.getenv("AGENT_DEBUG", "false")
 
@@ -75,3 +79,7 @@ SUB_AGENT_MODEL = os.getenv("SUB_AGENT_MODEL", "glm-5-turbo")
 SUB_AGENT_MODEL_PROVIDER = os.getenv("SUB_AGENT_MODEL_PROVIDER", AGENT_MODEL_PROVIDER)
 SUB_AGENT_API_BASE = os.getenv("SUB_AGENT_API_BASE", OPENAI_API_BASE)
 SUB_AGENT_API_KEY = os.getenv("SUB_AGENT_API_KEY", OPENAI_API_KEY)
+
+# Agent display mode: "normal" (content only) or "full_history" (content + tool_call + tool_result)
+# Controls both streaming SSE output and history retrieval
+AGENT_DISPLAY_MODE = os.getenv("AGENT_DISPLAY_MODE", "full_history")

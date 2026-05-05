@@ -161,6 +161,14 @@ export ORCHESTRATOR_URL=http://localhost:8080
 export IDLE_TIMEOUT_MINUTES=5  # 開發時設短一點
 export REAP_CHECK_INTERVAL_SECONDS=30
 
+# CWA 台灣氣象署開放資料 API（Agent research_agent 使用）
+export CWA_API_BASE="https://opendata.cwa.gov.tw/api/v1/rest/datastore"
+export CWA_API_KEY="your-cwa-api-key"  # 至 https://opendata.cwa.gov.tw 申請
+
+# Agent SSE Display Mode（控制 tool_call/tool_result 事件可見性）
+# "normal": 僅 content/file/error；"full_history": 額外輸出 tool_call/tool_result
+export AGENT_DISPLAY_MODE="normal"
+
 export DOMAIN_SUFFIX=localhost
 export API_PORT=8080
 export MCP_PORT=8080

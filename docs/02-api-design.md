@@ -1320,6 +1320,37 @@ Agent 容器實作 MCP (Model Context Protocol) 服務，支援以下工具：
 
 ---
 
+#### Tool: taiwan_weather
+
+**描述**：查詢台灣天氣資訊（中央氣象署 CWA 開放資料 API，需設定 `CWA_API_KEY`）
+
+**來源**：`poc/agent/tools.py` 的 `CWAWeatherTool`
+
+**支援資料集**：
+
+| 查詢類型 | 資料集 ID | 說明 |
+|---------|-----------|------|
+| `forecast_36h` | F-C0032-001 | 今明 36 小時天氣預報 |
+| `forecast_7d` | F-C0032-005 | 一週天氣預報 |
+| `observation` | O-A0003-001 | 即時氣象觀測 |
+| `rain` | O-A0002-001 | 即時雨量觀測 |
+
+**輸入**：
+```json
+{
+  "query": "forecast_36h 臺北市"
+}
+```
+
+**輸出**：
+```json
+{
+  "result": "📋 一般天氣預報-今明 36 小時天氣預報\n\n🏙️ 臺北市\n  Wx: 晴時多雲 (2025-04-28 06:00:00 ~ 2025-04-28 18:00:00)\n  ..."
+}
+```
+
+---
+
 ### 3.2 健康檢查端點
 
 #### GET /health
@@ -1487,11 +1518,15 @@ Agent 容器實作 MCP (Model Context Protocol) 服務，支援以下工具：
 
 **響應**：Server-Sent Events
 - `event: content` — AI 回應文字片段
-- `event: tool_call` — 工具呼叫
-- `event: tool_result` — 工具執行結果
+- `event: tool_call` — 工具呼叫（僅 `AGENT_DISPLAY_MODE=full_history` 時輸出）
+- `event: tool_result` — 工具執行結果（僅 `AGENT_DISPLAY_MODE=full_history` 時輸出）
 - `event: file` — 工具產生的檔案（圖片、文件等），包含 `path`、`type`（`image`/`document`）、`name`
 - `event: error` — Agent 錯誤（recursion limit、LLM 連線失敗等），包含 `error` 訊息
 - `data: [DONE]` — 串流結束
+
+> **Display Mode**：透過環境變數 `AGENT_DISPLAY_MODE` 控制 SSE 事件可見性。
+> `normal`（預設）僅輸出 `content`/`file`/`error`；`full_history` 額外輸出 `tool_call`/`tool_result`。
+> 同時影響 `/api/v1/sessions/{sid}/messages` 的歷史訊息過濾。
 
 ---
 

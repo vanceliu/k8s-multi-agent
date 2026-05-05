@@ -78,7 +78,7 @@ mcp_resp=$(curl -s -X POST "$GATEWAY/workspaces/${WORKSPACE_A}/mcp/execute" \
     -H "Content-Type: application/json" \
     -d '{"method":"execute_task","params":{"task_id":"t1","task_type":"test"}}')
 echo "  MCP response: $mcp_resp"
-check "MCP execute returns completed" "completed" "$mcp_resp"
+check "MCP execute returns content" "content" "$mcp_resp"
 
 # Write file
 curl -s -X POST "$GATEWAY/workspaces/${WORKSPACE_A}/mcp/execute" \
@@ -102,6 +102,99 @@ list_resp=$(curl -s -X POST "$GATEWAY/workspaces/${WORKSPACE_A}/mcp/execute" \
     -H "Content-Type: application/json" \
     -d '{"method":"list_files","params":{"path":"."}}')
 check "List files includes test.txt" "test.txt" "$list_resp"
+
+# ── 4b. Chat streaming + history consistency ─────────────────────────
+echo ""
+echo "[4b] Chat streaming + history consistency (normal mode)"
+
+# Send a chat message via streaming endpoint and capture SSE events
+SESSION_CHAT="sess-chat-$(date +%s)"
+ensure_chat=$(curl -s -X POST "$GATEWAY/api/v1/workspaces/ensure" \
+    -H "Authorization: Bearer ${TOKEN}:${USER_A}" \
+    -H "Content-Type: application/json" \
+    -d "{\"session_id\": \"$SESSION_CHAT\"}")
+check "Chat session ensured" "ready" "$ensure_chat"
+
+# Wait for pod readiness
+sleep 5
+
+# Stream a simple chat message
+stream_resp=$(curl -s -N -X POST "$GATEWAY/workspaces/${WORKSPACE_A}/api/v1/chat/stream" \
+    -H "Authorization: Bearer ${TOKEN}:${USER_A}" \
+    -H "X-Session-Id: $SESSION_CHAT" \
+    -H "Content-Type: application/json" \
+    -d "{\"message\": \"請回覆：測試成功\", \"session_id\": \"$SESSION_CHAT\"}" \
+    --max-time 60 2>/dev/null)
+
+# Verify streaming has content events
+echo "$stream_resp" | grep -q "event: content" && {
+    echo "  ✓ Streaming has content events"
+    ((pass++)) || true
+} || {
+    echo "  ✗ Streaming missing content events"
+    ((fail++)) || true
+}
+
+# In normal mode, streaming should NOT have tool_call/tool_result events
+if echo "$stream_resp" | grep -q "event: tool_call"; then
+    echo "  ✗ Normal mode streaming should not have tool_call events"
+    ((fail++)) || true
+else
+    echo "  ✓ Normal mode streaming has no tool_call events"
+    ((pass++)) || true
+fi
+
+if echo "$stream_resp" | grep -q "event: tool_result"; then
+    echo "  ✗ Normal mode streaming should not have tool_result events"
+    ((fail++)) || true
+else
+    echo "  ✓ Normal mode streaming has no tool_result events"
+    ((pass++)) || true
+fi
+
+# Check stream completed
+check "Stream completed" "[DONE]" "$stream_resp"
+
+# Wait for checkpoint to be written
+sleep 2
+
+# Fetch session history
+history_resp=$(curl -s "$GATEWAY/api/v1/sessions/${SESSION_CHAT}/messages" \
+    -H "Authorization: Bearer ${TOKEN}:${USER_A}")
+echo "  History: $(echo "$history_resp" | head -c 200)..."
+
+# History should NOT contain system messages
+if echo "$history_resp" | grep -q '"role":"system"'; then
+    echo "  ✗ History should not contain system messages"
+    ((fail++)) || true
+else
+    echo "  ✓ History has no system messages"
+    ((pass++)) || true
+fi
+
+# History should contain human message
+check "History has human message" "human" "$history_resp"
+
+# History should contain AI response
+check "History has AI response" '"role":"ai"' "$history_resp"
+
+# History should NOT contain transfer/handoff messages in normal mode
+if echo "$history_resp" | grep -q "transfer_to_"; then
+    echo "  ✗ History should not contain handoff messages"
+    ((fail++)) || true
+else
+    echo "  ✓ History has no handoff messages"
+    ((pass++)) || true
+fi
+
+# In normal mode, history should NOT contain tool_calls
+if echo "$history_resp" | grep -q '"tool_calls"'; then
+    echo "  ✗ Normal mode history should not have tool_calls"
+    ((fail++)) || true
+else
+    echo "  ✓ Normal mode history has no tool_calls"
+    ((pass++)) || true
+fi
 
 # ── 5. Query workspace ────────────────────────────────────────────────
 echo ""

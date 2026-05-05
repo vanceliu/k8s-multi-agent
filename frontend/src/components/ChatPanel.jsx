@@ -22,7 +22,13 @@ function MermaidDiagram({ chart }) {
           containerRef.current.innerHTML = svg;
         }
       } catch (e) {
-        if (!cancelled) setError(e.message || 'Mermaid render failed');
+        if (!cancelled) {
+          // Mermaid may inject error HTML into the DOM — clean it up
+          if (containerRef.current) containerRef.current.innerHTML = '';
+          // Also remove any orphaned error elements mermaid inserts into document body
+          document.querySelectorAll(`#d${id}, [id="${id}"]`).forEach((el) => el.remove());
+          setError(e.message || 'Mermaid render failed');
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -32,9 +38,9 @@ function MermaidDiagram({ chart }) {
 
   if (error) {
     return (
-      <div className="rounded border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/30 p-2 text-xs text-red-600 dark:text-red-400">
-        <div className="font-medium">Mermaid 渲染失敗</div>
-        <pre className="mt-1 whitespace-pre-wrap">{error}</pre>
+      <div className="rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 p-2 text-xs">
+        <div className="text-gray-500 dark:text-gray-400 mb-1">Mermaid 圖表無法渲染，顯示原始碼：</div>
+        <pre className="whitespace-pre-wrap text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded p-2 overflow-auto">{chart}</pre>
       </div>
     );
   }
@@ -171,7 +177,7 @@ function apiMessagesToChat(apiMessages, { baseUrl, workspaceId } = {}) {
       // Render files attached to tool results (images inline, documents as links)
       if (msg.files && msg.files.length > 0 && baseUrl && workspaceId) {
         for (const f of msg.files) {
-          const downloadUrl = `${baseUrl}/workspaces/${workspaceId}/api/v1/files/download?path=${encodeURIComponent(f.path)}`;
+          const downloadUrl = `${baseUrl}/api/v1/workspaces/${workspaceId}/storage/files/download?path=${encodeURIComponent(f.path)}`;
           result.push({
             role: 'file',
             fileType: f.type,
@@ -397,7 +403,7 @@ export default function ChatPanel() {
               },
               onThinking: () => { setThinking(true); },
               onFile: (fileData) => {
-                const downloadUrl = `${baseUrl}/workspaces/${workspaceIdRef.current}/api/v1/files/download?path=${encodeURIComponent(fileData.path)}`;
+                const downloadUrl = `${baseUrl}/api/v1/workspaces/${workspaceIdRef.current}/storage/files/download?path=${encodeURIComponent(fileData.path)}`;
                 setMessages((prev) => [...prev, {
                   role: 'file',
                   fileType: fileData.type,
@@ -697,6 +703,25 @@ export default function ChatPanel() {
                             return <MermaidDiagram chart={String(children).replace(/\n$/, '')} />;
                           }
                           return <code className={className} {...props}>{children}</code>;
+                        },
+                        img({ src, alt, ...props }) {
+                          if (!src) return <img src={src} alt={alt} {...props} />;
+                          // Absolute URL pointing to our gateway — needs auth
+                          if (src.startsWith(baseUrl)) {
+                            return <AuthImage src={src} alt={alt || ''} token={token} className="max-w-full rounded" />;
+                          }
+                          // Relative path or workspace internal path — build download URL with auth
+                          if (!src.startsWith('http')) {
+                            let filePath = src.startsWith('/') ? src.slice(1) : src;
+                            // Pure filename (no directory separator) — likely generated in session workspace dir
+                            if (!filePath.includes('/')) {
+                              filePath = `sessions/${sessionId}/${filePath}`;
+                            }
+                            const downloadUrl = `${baseUrl}/api/v1/workspaces/${workspaceIdRef.current}/storage/files/download?path=${encodeURIComponent(filePath)}`;
+                            return <AuthImage src={downloadUrl} alt={alt || ''} token={token} className="max-w-full rounded" />;
+                          }
+                          // External URL — render normally
+                          return <img src={src} alt={alt} {...props} />;
                         },
                       }}
                     >{msg.content || '...'}</ReactMarkdown>

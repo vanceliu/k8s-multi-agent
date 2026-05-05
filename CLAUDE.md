@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-一個基於 Kubernetes 的使用者專屬 Agent 工作區管理系統。文件以繁體中文撰寫。專案包含完整設計文件（docs/01-08）以及已驗證通過的 POC 實作（poc/）。
+一個基於 Kubernetes 的使用者專屬 Agent 工作區管理系統。文件以繁體中文撰寫。專案包含完整設計文件（docs/01-09）以及已驗證通過的 POC 實作（poc/）。
 
 系統讓使用者透過單一 API Gateway 登入，由 Orchestrator 在 K8s 中自動建立/恢復專屬 Agent Pod。Gateway 透過 IM Channel 抽象層（或直接 proxy）路由到對應 Pod。同一 workspace 的多個 session 共用同一個 Pod，閒置後自動回收 Pod 但透過 PVC 保留資料（Production 改用 AWS S3）。支援個人與群組兩種 workspace，透過 `workspace_members` 表做存取控制（owner/admin/member/readonly）。
 
@@ -105,7 +105,7 @@ KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name agent-poc
 ## Directory Structure
 
 ```
-docs/                              # 設計文件 (01-08)
+docs/                              # 設計文件 (01-09)
 poc/
   gateway/
     main.py                        # API Gateway (:8000)
@@ -140,7 +140,7 @@ poc/
     runtime.py                     # DeepAgentsRuntime（Supervisor + Sub-Agent: research_agent + code_agent）
     middleware.py                  # SkillsInjectionMiddleware（flat agent fallback 用，supervisor 透過 session context 注入）
     http_server.py                 # FastAPI HTTP 層（chat/mcp/shutdown/files CRUD）
-    tools.py                       # 工具分組（research_tools, code_tools, common_tools）+ RateLimitedSearchTool
+    tools.py                       # 工具分組（research_tools, code_tools, common_tools）+ LoggingSearchTool + CWAWeatherTool
     skills/                        # 內建 skill 定義（隨 image 部署）
       daily-summary/SKILL.md       # 每日活動摘要
       docx/SKILL.md                # Word 文件產生
@@ -152,7 +152,7 @@ poc/
   db/
     models.py                      # 6 張表 ORM（含 workspace_members，POC 版）
     session.py                     # PostgreSQL async session
-  utils/config.py                  # 設定 (env vars)
+  utils/config.py                  # 設定 (env vars, 含 CWA_API_KEY/CWA_API_BASE/AGENT_DISPLAY_MODE)
   docker/
     Dockerfile.agent               # Agent 鏡像
     Dockerfile.orchestrator        # Orchestrator 鏡像
@@ -176,7 +176,7 @@ poc/
 
 ## Design Documents
 
-All under `docs/`, numbered 01-08. These are the source of truth for production implementation:
+All under `docs/`, numbered 01-09. These are the source of truth for production implementation:
 - **01** Requirements spec (functional + non-functional)
 - **02** API design (HTTP endpoints, internal RPC, agent container API)
 - **03** Data model (7 PostgreSQL tables including workspace_members, K8s resource naming conventions)
@@ -185,6 +185,7 @@ All under `docs/`, numbered 01-08. These are the source of truth for production 
 - **06** Agent container (LangChain Deep Agents runtime, FastAPI HTTP layer, MCP compatibility)
 - **07** Deployment guide (local dev, Docker builds, Helm, monitoring)
 - **08** Fault recovery (error classification, retry strategies, DRP)
+- **09** Agent tools (tool groups, sandbox, CWA weather, how to add new tools)
 
 ## Key Design Decisions
 
@@ -256,8 +257,9 @@ All under `docs/`, numbered 01-08. These are the source of truth for production 
 - **Session 隔離 (已完成)**: Per-session agent cache, SandboxedShellTool/PythonREPLTool cwd 強制 `sessions/{sid}/`, session context prompt injection
 - **Skill 系統 (已完成)**: 三層優先級載入（shared > bundled > workspace）, SKILL.md frontmatter 解析, supervisor 透過 session context 動態注入 skills metadata, 5 個 bundled skills（daily-summary, docx, pdf, pptx, xlsx）
 - **Supervisor 架構 (已完成)**: langgraph-supervisor, create_supervisor + create_react_agent, research_agent（搜尋, rate-limited）+ code_agent（執行, sandboxed）, GraphRecursionError 優雅處理（event: error）, fallback 到 flat agent
-- **SSE 串流事件 (已完成)**: event: content/tool_call/tool_result/file/error, 檔案自動偵測推送, GraphRecursionError 不斷線
+- **SSE 串流事件 (已完成)**: event: content/tool_call/tool_result/file/error, 檔案自動偵測推送, GraphRecursionError 不斷線, `AGENT_DISPLAY_MODE` 控制 tool_call/tool_result 可見性（`normal`: 僅 content, `full_history`: 含 tool 事件）
 - **Supervisor 架構升級 (已完成)**: create_agent → create_supervisor + create_react_agent (research_agent + code_agent), skills 透過 session context 注入, K8s 整合驗證通過
+- **台灣氣象查詢工具 (已完成)**: CWAWeatherTool（中央氣象署開放資料 API），整合至 research_agent，支援 36h 預報、一週預報、即時觀測、即時雨量，config 透過 `CWA_API_KEY` / `CWA_API_BASE` 環境變數設定，SSL verify 停用（CWA 憑證相容性問題）
 - **檔案操作 (已完成)**: Agent `/api/v1/files/upload|download|list|delete|mkdir`, Gateway proxy endpoints, LocalBackend path traversal 防護, delete 支援檔案+目錄
 - **對話歷史 (已完成)**: `/api/v1/sessions/{sid}/messages` 從 LangGraph checkpointer 取得對話紀錄
 - **Admin Service (已完成)**: 獨立 Pod (:8090, ClusterIP), Gateway proxy `/api/v1/admin/*` 統一入口, user CRUD, workspace 列表/查詢/刪除, workspace_members 角色管理 (owner/admin/member/readonly), Pod 狀態總覽（K8s 即時查詢）, reap 觸發, workspace 刪除（Storage Service 刪 PVC → Orchestrator 刪 DB + K8s）, 透過 Orchestrator + Storage Service API 操作（不直接碰 K8s）, POC admin token 雙層驗證（Gateway + Admin Service）

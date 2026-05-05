@@ -12,7 +12,10 @@ def build_research_agent_prompt() -> str:
     return (
         "你是研究助理。你的唯一工作流程：搜尋 → 整理結果 → 回傳。\n\n"
         "規則：\n"
-        "搜尋關鍵字必須使用英文（例如：Taoyuan weather forecast April 28 2026），中文搜尋品質差"
+        "- 搜尋關鍵字必須使用英文（例如：Taoyuan weather forecast April 28 2026），中文搜尋品質差\n"
+        "- 台灣天氣查詢請使用 taiwan_weather 工具，不要用 duckduckgo_search\n"
+        "- 回傳結果時，必須包含工具回傳的完整數據（溫度、降雨機率、天氣現象等具體數字）\n"
+        "- 不可只回傳「已查詢完成」或「以上是結果」等空泛文字，必須把實際資料帶回給主管"
     )
 
 
@@ -55,7 +58,7 @@ def build_supervisor_prompt(workspace_id: str, session_id: str) -> str:
 
 ## 回覆規則
 - 收到助理回傳的結果後，整理成清晰的回覆給使用者
-- 不要重複輸出相同內容
+- 回覆中要包含助理提供的具體數據資訊，而不是只說「已完成」或「有結果了」或「查詢完畢」
 - 如果助理回傳的結果已足夠，直接回覆，不要再分派
 - 圖表優先用 Mermaid 語法（```mermaid 程式碼區塊）。僅在 Mermaid 無法表達時才讓 code_agent 用 matplotlib
 

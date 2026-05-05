@@ -21,7 +21,7 @@ def create_research_agent(model: Any, tools: list) -> Any:
     from langgraph.prebuilt import create_react_agent
 
     prompt = build_research_agent_prompt()
-    logger.info("[research_agent] prompt:\n%s", prompt)
+    logger.debug("[research_agent] prompt:\n%s", prompt)
 
     return create_react_agent(
         model=model,
@@ -67,7 +67,7 @@ def create_supervisor_workflow(
     from langgraph_supervisor import create_supervisor
 
     supervisor_prompt = build_supervisor_prompt(workspace_id, session_id)
-    logger.info("[supervisor] prompt:\n%s", supervisor_prompt)
+    logger.debug("[supervisor] prompt:\n%s", supervisor_prompt)
 
     research_agent = create_research_agent(sub_model, research_tools)
     code_agent = create_code_agent(sub_model, code_tools + common_tools, session_id)
@@ -76,13 +76,13 @@ def create_supervisor_workflow(
         agents=[research_agent, code_agent],
         model=model,
         prompt=supervisor_prompt,
-        output_mode="last_message",
+        output_mode="full_history",
         add_handoff_messages=True,
     )
 
     app = workflow.compile(checkpointer=checkpointer)
 
-    logger.info(
+    logger.debug(
         "Supervisor workflow created for session %s (research_agent + code_agent)",
         session_id,
     )

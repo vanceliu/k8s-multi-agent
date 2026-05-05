@@ -427,7 +427,6 @@ class DeepAgentsRuntime:
             if agent is not None:
                 result = await agent.ainvoke(
                     {"messages": [
-                        ("system", self._session_context_message(session_id)),
                         ("user", message),
                     ]},
                     config={
@@ -460,19 +459,20 @@ class DeepAgentsRuntime:
 
         Yields structured event dicts for the SSE handler:
           - {"type": "content", "content": "token"}
-          - {"type": "tool_call", "name": "...", "args": {...}}
-          - {"type": "tool_result", "tool_name": "...", "content": "..."}
+          - {"type": "tool_call", "name": "...", "args": {...}}  (full_history mode only)
+          - {"type": "tool_result", "tool_name": "...", "content": "..."}  (full_history mode only)
+          - {"type": "file", "path": "...", "file_type": "...", "name": "..."}  (both modes)
           - {"type": "thinking"}  (keepalive during LLM reasoning)
           - {"type": "error", "error": "..."}
         """
         self._ensure_session_dir(session_id)
         self._active_requests += 1
+        show_tools = self.config.display_mode == "full_history"
         try:
             agent = self._get_or_create_agent(session_id)
             if agent is not None:
                 async for event in agent.astream_events(
                     {"messages": [
-                        ("system", self._session_context_message(session_id)),
                         ("user", message),
                     ]},
                     config={
@@ -497,15 +497,15 @@ class DeepAgentsRuntime:
                             elif not content and not is_sub_agent:
                                 yield {"type": "thinking"}
 
-                    # Tool start — emit tool_call events
-                    elif kind == "on_tool_start":
+                    # Tool start — emit tool_call events (full_history mode only)
+                    elif kind == "on_tool_start" and show_tools:
                         tool_name = event.get("name", "")
                         tool_input = event.get("data", {}).get("input", {})
                         # Skip internal handoff tools
                         if not tool_name.startswith("transfer_"):
                             yield {"type": "tool_call", "name": tool_name, "args": tool_input}
 
-                    # Tool end — emit tool_result events
+                    # Tool end — always scan for files; emit tool_result in full_history only
                     elif kind == "on_tool_end":
                         tool_name = event.get("name", "")
                         output = event.get("data", {}).get("output", "")
@@ -515,7 +515,10 @@ class DeepAgentsRuntime:
                                 content = output.content
                             else:
                                 content = str(output) if output else ""
-                            yield {"type": "tool_result", "tool_name": tool_name, "content": content}
+                            if show_tools:
+                                yield {"type": "tool_result", "tool_name": tool_name, "content": content}
+                            # Always yield file events (both modes)
+                            yield {"type": "tool_output_for_files", "tool_name": tool_name, "content": content}
 
             else:
                 yield {

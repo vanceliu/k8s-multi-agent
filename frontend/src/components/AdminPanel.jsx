@@ -109,9 +109,9 @@ function UsersSection({ adminApi }) {
             <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
               {users.users.map((u) => (
                 <tr key={u.user_id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
-                  <td className="px-3 py-2 font-mono text-xs">{u.user_id}</td>
-                  <td className="px-3 py-2 text-xs">{u.email || '-'}</td>
-                  <td className="px-3 py-2 text-xs">{u.auth_provider}</td>
+                  <td className="px-3 py-2 font-mono text-xs dark:text-gray-300">{u.user_id}</td>
+                  <td className="px-3 py-2 text-xs dark:text-gray-300">{u.email || '-'}</td>
+                  <td className="px-3 py-2 text-xs dark:text-gray-300">{u.auth_provider}</td>
                   <td className="px-3 py-2">
                     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
                       u.is_active ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400' : 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400'
@@ -119,7 +119,7 @@ function UsersSection({ adminApi }) {
                       {u.is_active ? '啟用' : '停用'}
                     </span>
                   </td>
-                  <td className="px-3 py-2 text-xs text-gray-500">
+                  <td className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">
                     {u.created_at ? new Date(u.created_at).toLocaleString('zh-TW') : '-'}
                   </td>
                   <td className="px-3 py-2">
@@ -348,13 +348,13 @@ function WorkspacesSection({ adminApi }) {
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-500">
+          <span className="text-sm text-gray-500 dark:text-gray-400">
             {workspaces ? `共 ${workspaces.total} 個工作區` : ''}
           </span>
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="rounded border border-gray-300 px-2 py-1 text-xs"
+            className="rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 dark:text-gray-200 px-2 py-1 text-xs"
           >
             <option value="">全部</option>
             <option value="active">Active</option>
@@ -429,15 +429,15 @@ function WorkspacesSection({ adminApi }) {
             <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
               {workspaces.workspaces.map((ws) => (
                 <tr key={ws.workspace_id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
-                  <td className="px-3 py-2 font-mono text-xs">{ws.workspace_id}</td>
-                  <td className="px-3 py-2 text-xs">
+                  <td className="px-3 py-2 font-mono text-xs dark:text-gray-300">{ws.workspace_id}</td>
+                  <td className="px-3 py-2 text-xs dark:text-gray-300">
                     {renaming === ws.workspace_id ? (
                       <span className="flex items-center gap-1">
                         <input
                           value={renameValue}
                           onChange={(e) => setRenameValue(e.target.value)}
                           onKeyDown={(e) => e.key === 'Enter' && handleRename(ws.workspace_id)}
-                          className="w-28 rounded border border-gray-300 px-1 py-0.5 text-xs focus:border-blue-500 focus:outline-none"
+                          className="w-28 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 dark:text-gray-200 px-1 py-0.5 text-xs focus:border-blue-500 focus:outline-none"
                           autoFocus
                         />
                         <button onClick={() => handleRename(ws.workspace_id)} className="text-blue-600 hover:underline">OK</button>
@@ -445,7 +445,7 @@ function WorkspacesSection({ adminApi }) {
                       </span>
                     ) : (
                       <span
-                        className="cursor-pointer hover:text-blue-600"
+                        className="cursor-pointer hover:text-blue-600 dark:hover:text-blue-400"
                         onClick={() => { setRenaming(ws.workspace_id); setRenameValue(ws.display_name || ''); }}
                         title="點擊修改顯示名稱"
                       >
@@ -453,7 +453,7 @@ function WorkspacesSection({ adminApi }) {
                       </span>
                     )}
                   </td>
-                  <td className="px-3 py-2 text-xs">{ws.user_id}</td>
+                  <td className="px-3 py-2 text-xs dark:text-gray-300">{ws.user_id}</td>
                   <td className="px-3 py-2">
                     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
                       ws.status === 'active' ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
@@ -461,8 +461,8 @@ function WorkspacesSection({ adminApi }) {
                       {ws.status}
                     </span>
                   </td>
-                  <td className="px-3 py-2 text-xs">{ws.resource_tier}</td>
-                  <td className="px-3 py-2 text-xs">{ws.active_sessions ?? '-'}</td>
+                  <td className="px-3 py-2 text-xs dark:text-gray-300">{ws.resource_tier}</td>
+                  <td className="px-3 py-2 text-xs dark:text-gray-300">{ws.active_sessions ?? '-'}</td>
                   <td className="px-3 py-2">
                     <div className="flex gap-1 flex-wrap">
                       <button onClick={() => toggleMembers(ws.workspace_id)} className="rounded bg-gray-100 dark:bg-gray-700 px-2 py-1 text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600">
@@ -509,7 +509,7 @@ function WorkspacesSection({ adminApi }) {
       {fileBrowser && (
         <div className="rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 p-3 space-y-2">
           <div className="flex items-center justify-between">
-            <h4 className="text-sm font-medium">
+            <h4 className="text-sm font-medium dark:text-gray-200">
               {fileBrowser.wsId}
               <span className="ml-2 font-mono text-xs text-gray-500 dark:text-gray-400">/{fileBrowser.path}</span>
               {fileBrowser.mode && (
@@ -552,7 +552,7 @@ function WorkspacesSection({ adminApi }) {
           ) : (
             <div className="overflow-auto rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
               <table className="w-full text-xs">
-                <thead className="bg-gray-50 text-left text-gray-500">
+                <thead className="bg-gray-50 dark:bg-gray-800 text-left text-gray-500 dark:text-gray-400">
                   <tr>
                     <th className="px-3 py-1.5">名稱</th>
                     <th className="px-3 py-1.5">類型</th>
@@ -562,17 +562,17 @@ function WorkspacesSection({ adminApi }) {
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                   {fileBrowser.path && (
-                    <tr className="hover:bg-gray-50 cursor-pointer" onClick={navigateUp}>
-                      <td className="px-3 py-1.5 text-blue-600" colSpan={4}>.. (上一層)</td>
+                    <tr className="hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer" onClick={navigateUp}>
+                      <td className="px-3 py-1.5 text-blue-600 dark:text-blue-400" colSpan={4}>.. (上一層)</td>
                     </tr>
                   )}
                   {fileBrowser.files?.map((f) => (
                     <tr key={f.name} className="hover:bg-gray-50 dark:hover:bg-gray-700">
-                      <td className="px-3 py-1.5 font-mono">
+                      <td className="px-3 py-1.5 font-mono dark:text-gray-300">
                         {f.type === 'dir' ? (
                           <button
                             onClick={() => openFiles(fileBrowser.wsId, fileBrowser.path ? `${fileBrowser.path}/${f.name}` : f.name)}
-                            className="text-blue-600 hover:underline"
+                            className="text-blue-600 dark:text-blue-400 hover:underline"
                           >
                             {f.name}/
                           </button>
@@ -583,9 +583,9 @@ function WorkspacesSection({ adminApi }) {
                       <td className="px-3 py-1.5">
                         <div className="flex gap-1">
                           {f.type === 'file' && (
-                            <button onClick={() => handleFileDownload(f.name)} className="text-blue-600 hover:underline">下載</button>
+                            <button onClick={() => handleFileDownload(f.name)} className="text-blue-600 dark:text-blue-400 hover:underline">下載</button>
                           )}
-                          <button onClick={() => handleFileDelete(f.name, f.type)} className="text-red-500 hover:underline">刪除</button>
+                          <button onClick={() => handleFileDelete(f.name, f.type)} className="text-red-500 dark:text-red-400 hover:underline">刪除</button>
                         </div>
                       </td>
                     </tr>
@@ -613,7 +613,7 @@ function WorkspacesSection({ adminApi }) {
             <div className="space-y-1">
               {accessData.members.map((m) => (
                 <div key={m.user_id} className="flex items-center gap-3 text-xs">
-                  <span className="font-mono">{m.user_id}</span>
+                  <span className="font-mono dark:text-gray-300">{m.user_id}</span>
                   <span className={`rounded-full px-2 py-0.5 font-medium ${
                     m.role === 'owner' ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400'
                     : m.role === 'admin' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400'
@@ -740,7 +740,7 @@ function MembersPanel({ adminApi, workspaceId, members, onClose, onRefresh, setE
             <select
               value={addRole}
               onChange={(e) => setAddRole(e.target.value)}
-              className="rounded border border-gray-300 px-2 py-1 text-xs"
+              className="rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 dark:text-gray-200 px-2 py-1 text-xs"
             >
               <option value="member">member</option>
               <option value="admin">admin</option>
@@ -757,8 +757,8 @@ function MembersPanel({ adminApi, workspaceId, members, onClose, onRefresh, setE
                     onChange={() => toggleUser(u.user_id)}
                     className="rounded border-gray-300"
                   />
-                  <span className="font-mono">{u.user_id}</span>
-                  {u.email && <span className="text-gray-400">{u.email}</span>}
+                  <span className="font-mono dark:text-gray-300">{u.user_id}</span>
+                  {u.email && <span className="text-gray-400 dark:text-gray-500">{u.email}</span>}
                 </label>
               ))}
             </div>
@@ -783,7 +783,7 @@ function MembersPanel({ adminApi, workspaceId, members, onClose, onRefresh, setE
         <div className="space-y-1">
           {members.members.map((m) => (
             <div key={m.user_id} className="flex items-center gap-3 text-xs">
-              <span className="font-mono min-w-[100px]">{m.user_id}</span>
+              <span className="font-mono min-w-[100px] dark:text-gray-300">{m.user_id}</span>
               {m.role === 'owner' ? (
                 roleBadge('owner')
               ) : (
@@ -868,7 +868,7 @@ function PodsSection({ adminApi }) {
             </div>
           </div>
 
-          <div className="text-sm text-gray-500">
+          <div className="text-sm text-gray-500 dark:text-gray-400">
             總 Sessions: {pods.total_sessions ?? 0}
           </div>
 
@@ -888,11 +888,11 @@ function PodsSection({ adminApi }) {
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                   {pods.running_pods.map((pod) => (
                     <tr key={pod.pod_name} className="hover:bg-gray-50 dark:hover:bg-gray-700">
-                      <td className="px-3 py-2 font-mono text-xs">{pod.pod_name}</td>
-                      <td className="px-3 py-2 font-mono text-xs">{pod.workspace_id}</td>
-                      <td className="px-3 py-2 text-xs">{pod.user_id}</td>
-                      <td className="px-3 py-2 font-mono text-xs">{pod.session_id}</td>
-                      <td className="px-3 py-2 text-xs text-gray-500">
+                      <td className="px-3 py-2 font-mono text-xs dark:text-gray-300">{pod.pod_name}</td>
+                      <td className="px-3 py-2 font-mono text-xs dark:text-gray-300">{pod.workspace_id}</td>
+                      <td className="px-3 py-2 text-xs dark:text-gray-300">{pod.user_id}</td>
+                      <td className="px-3 py-2 font-mono text-xs dark:text-gray-300">{pod.session_id}</td>
+                      <td className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">
                         {pod.last_active_at ? new Date(pod.last_active_at).toLocaleString('zh-TW') : '-'}
                       </td>
                     </tr>
@@ -950,11 +950,11 @@ function ChannelsSection({ adminApi }) {
             </div>
             <div className="rounded border border-gray-200 dark:border-gray-700 p-3">
               <span className="text-gray-500 dark:text-gray-400">Chat→Workspace 映射數</span>
-              <div className="mt-1 font-medium">{channelStatus.store_mappings}</div>
+              <div className="mt-1 font-medium dark:text-gray-200">{channelStatus.store_mappings}</div>
             </div>
             <div className="rounded border border-gray-200 dark:border-gray-700 p-3">
               <span className="text-gray-500 dark:text-gray-400">待處理 Inbound 訊息</span>
-              <div className="mt-1 font-medium">{channelStatus.inbound_pending}</div>
+              <div className="mt-1 font-medium dark:text-gray-200">{channelStatus.inbound_pending}</div>
             </div>
             <div className="rounded border border-gray-200 dark:border-gray-700 p-3">
               <span className="text-gray-500 dark:text-gray-400">Channels</span>
@@ -962,7 +962,7 @@ function ChannelsSection({ adminApi }) {
                 {channelStatus.channels && Object.entries(channelStatus.channels).map(([name, info]) => (
                   <div key={name} className="flex items-center gap-2 text-xs">
                     <span className={`h-2 w-2 rounded-full ${info.running ? 'bg-green-500' : 'bg-red-500'}`} />
-                    <span className="font-mono">{name}</span>
+                    <span className="font-mono dark:text-gray-300">{name}</span>
                     <span className="text-gray-400 dark:text-gray-500">{info.running ? '運行中' : '已停止'}</span>
                   </div>
                 ))}
@@ -1047,7 +1047,7 @@ function ReapSection({ adminApi }) {
 
       {result && (
         <div className="space-y-2">
-          <div className="text-sm">
+          <div className="text-sm dark:text-gray-200">
             已回收 <span className="font-semibold">{result.total_reaped}</span> 個工作區
           </div>
           <pre className="rounded bg-gray-100 dark:bg-gray-700 p-3 text-xs dark:text-gray-300 overflow-auto">

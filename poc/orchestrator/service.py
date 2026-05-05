@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from poc.db.models import ActivityLog, PodState, Session, User, Workspace, WorkspaceMember
 from poc.orchestrator.k8s_client import K8sClient
-from poc.utils.config import ADMIN_STATIC_TOKEN, DEFAULT_PVC_SIZE_GB, STORAGE_SERVICE_HOST
+from poc.utils.config import ADMIN_STATIC_TOKEN, AGENT_DISPLAY_MODE, DEFAULT_PVC_SIZE_GB, STORAGE_SERVICE_HOST
 
 logger = logging.getLogger("orchestrator.service")
 
@@ -38,6 +38,14 @@ def _extract_files(text: str, session_id: str | None = None) -> list[dict]:
     raw = list(dict.fromkeys(_FILE_PATTERN.findall(text)))
     result = []
     for filepath in raw:
+        # Strip absolute paths — find the `sessions/` segment if present
+        sessions_idx = filepath.find("sessions/")
+        if sessions_idx > 0:
+            filepath = filepath[sessions_idx:]
+        elif filepath.startswith("/"):
+            # Unknown absolute path, skip
+            continue
+
         if session_id and not filepath.startswith("sessions/"):
             filepath = f"sessions/{session_id}/{filepath}"
         ext = Path(filepath).suffix.lower()
@@ -612,12 +620,20 @@ class OrchestratorService:
     async def get_session_messages(self, session_id: str) -> list[dict]:
         """Read conversation messages directly from PostgreSQL checkpointer.
 
-        Filters out sub-agent internal messages (research_agent, code_agent)
-        to only show supervisor-level conversation to the user.
+        Filtering behavior depends on AGENT_DISPLAY_MODE:
+          - "normal": only human + AI content (no tool_call/tool_result)
+          - "full_history": human + AI content + tool_call + tool_result + files
+
+        Both modes always filter out:
+          - system messages (session context prompt)
+          - handoff messages (transfer_* / transfer_back_to_*)
+          - sub-agent internal AI reasoning
         """
         checkpointer = await self._ensure_checkpointer()
         if checkpointer is None:
             return []
+
+        show_tools = AGENT_DISPLAY_MODE == "full_history"
 
         # Sub-agent node names to filter out
         _SUB_AGENT_NAMES = {"research_agent", "code_agent"}
@@ -637,25 +653,48 @@ class OrchestratorService:
                 content = getattr(msg, "content", "")
                 msg_name = getattr(msg, "name", None)
 
-                # Skip empty tool results
+                # Always skip system messages
+                if role == "system":
+                    continue
+
+                # Always skip empty tool results
                 if role == "tool" and not content:
                     continue
 
-                # Skip sub-agent AI messages (internal handoff/reasoning)
+                # Always skip sub-agent AI messages (internal reasoning)
                 if role == "ai" and msg_name in _SUB_AGENT_NAMES:
                     continue
 
-                # Skip handoff tool calls (transfer_to_*) from supervisor
+                # Always skip handoff tool messages (transfer_*)
+                if role == "tool" and msg_name and msg_name.startswith("transfer_"):
+                    continue
+
+                # Handle AI messages with tool_calls
                 tool_calls = getattr(msg, "tool_calls", None)
                 if role == "ai" and tool_calls:
-                    # Filter out handoff tool calls, keep real tool calls
+                    # Filter out handoff tool calls
                     real_calls = [
                         tc for tc in tool_calls
-                        if not tc.get("name", "").startswith("transfer_to_")
+                        if not tc.get("name", "").startswith("transfer_")
                     ]
+                    # AI message with only handoff calls and no content — skip entirely
                     if not real_calls and not content:
                         continue
                     tool_calls = real_calls if real_calls else None
+
+                # In normal mode, skip tool-related messages but extract files
+                if not show_tools:
+                    if role == "tool":
+                        # Still extract files and attach to the last AI entry
+                        files = _extract_files(content, session_id=session_id)
+                        if files and result:
+                            for prev in reversed(result):
+                                if prev["role"] == "ai":
+                                    prev.setdefault("files", []).extend(files)
+                                    break
+                        continue
+                    # Strip tool_calls from AI messages (keep content only)
+                    tool_calls = None
 
                 entry = {
                     "role": role,
@@ -666,11 +705,18 @@ class OrchestratorService:
                         {"name": tc["name"], "args": tc.get("args", {})}
                         for tc in tool_calls
                     ]
-                if role == "tool":
+                if role == "tool" and show_tools:
                     entry["tool_name"] = msg_name
                     files = _extract_files(content, session_id=session_id)
                     if files:
                         entry["files"] = files
+
+                # Deduplicate consecutive identical human messages
+                if role == "human" and result:
+                    last = result[-1]
+                    if last["role"] == "human" and last["content"] == content:
+                        continue
+
                 result.append(entry)
             return result
         except Exception as e:
