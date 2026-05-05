@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-一個基於 Kubernetes 的使用者專屬 Agent 工作區管理系統。文件以繁體中文撰寫。專案包含完整設計文件（docs/01-09）以及已驗證通過的 POC 實作（poc/）。
+一個基於 Kubernetes 的使用者專屬 Agent 工作區管理系統。文件以繁體中文撰寫。專案包含完整設計文件（docs/01-10）以及已驗證通過的 POC 實作（poc/）。
 
 系統讓使用者透過單一 API Gateway 登入，由 Orchestrator 在 K8s 中自動建立/恢復專屬 Agent Pod。Gateway 透過 IM Channel 抽象層（或直接 proxy）路由到對應 Pod。同一 workspace 的多個 session 共用同一個 Pod，閒置後自動回收 Pod 但透過 PVC 保留資料（Production 改用 AWS S3）。支援個人與群組兩種 workspace，透過 `workspace_members` 表做存取控制（owner/admin/member/readonly）。
 
@@ -105,7 +105,7 @@ KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name agent-poc
 ## Directory Structure
 
 ```
-docs/                              # 設計文件 (01-09)
+docs/                              # 設計文件 (01-10)
 poc/
   gateway/
     main.py                        # API Gateway (:8000)
@@ -176,7 +176,7 @@ poc/
 
 ## Design Documents
 
-All under `docs/`, numbered 01-09. These are the source of truth for production implementation:
+All under `docs/`, numbered 01-10. These are the source of truth for production implementation:
 - **01** Requirements spec (functional + non-functional)
 - **02** API design (HTTP endpoints, internal RPC, agent container API)
 - **03** Data model (7 PostgreSQL tables including workspace_members, K8s resource naming conventions)
@@ -186,6 +186,7 @@ All under `docs/`, numbered 01-09. These are the source of truth for production 
 - **07** Deployment guide (local dev, Docker builds, Helm, monitoring)
 - **08** Fault recovery (error classification, retry strategies, DRP)
 - **09** Agent tools (tool groups, sandbox, CWA weather, how to add new tools)
+- **10** Scheduler Service (scheduled tasks, cron expressions, notification channels, tool risk levels) — Draft
 
 ## Key Design Decisions
 
@@ -265,6 +266,7 @@ All under `docs/`, numbered 01-09. These are the source of truth for production 
 - **Admin Service (已完成)**: 獨立 Pod (:8090, ClusterIP), Gateway proxy `/api/v1/admin/*` 統一入口, user CRUD, workspace 列表/查詢/刪除, workspace_members 角色管理 (owner/admin/member/readonly), Pod 狀態總覽（K8s 即時查詢）, reap 觸發, workspace 刪除（Storage Service 刪 PVC → Orchestrator 刪 DB + K8s）, 透過 Orchestrator + Storage Service API 操作（不直接碰 K8s）, POC admin token 雙層驗證（Gateway + Admin Service）
 - **Storage Service (已完成)**: 獨立 Pod (:8091, ClusterIP), Gateway proxy `/api/v1/workspaces/storage/*` 和 `/api/v1/workspaces/{wid}/storage/*`, workspace storage CRUD（create/ensure/rename/刪除/列表）, Admin 可預建 group workspace + PVC, 檔案操作雙模式（Pod 在線 proxy Agent / 離線 K8s Job）, 存取權限（workspace_members）, user token + admin token 雙模式認證, display_name 支援
 - **Multi-Workspace (已完成)**: workspace_type（personal/group）, Admin 預建 group workspace, 使用者 Pod 自動掛載 personal PVC (`/workspace/{wid}`) + 所有 group PVC (`/shared/{wid}`), readonly role 強制 K8s 層級 read-only mount, Pod 重建時自動更新掛載
+- **Scheduler Service (設計完成，未開始)**: 排程服務設計文件（Draft），定時任務、cron 表達式、通知管道、工具風險分級
 - **Phase 1 (未開始)**: Production Orchestrator + PostgreSQL + Alembic migrations
 - **Phase 2 (設計完成，未開始)**: LangChain Deep Agents container + FastAPI HTTP layer + MCP compatibility
 - **Phase 3 (未開始)**: Production API Gateway + JWT/OAuth2 + Slack/LINE/Teams channel adapters

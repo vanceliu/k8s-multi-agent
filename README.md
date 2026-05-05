@@ -12,6 +12,7 @@
 | Channel Layer | ✅ 已完成 | IM channel 抽象層（WebChannel），`/api/v1/chat` endpoint |
 | Admin Service | ✅ 已完成 | 獨立 Pod (:8090, ClusterIP)，Gateway proxy `/api/v1/admin/*` 統一入口，user/workspace/member 管理 |
 | Storage Service | ✅ 已完成 | 獨立 Pod (:8091, ClusterIP)，Gateway proxy `/api/v1/workspaces/{wid}/storage/*`，workspace storage CRUD + 檔案操作（雙模式）+ 存取權限 |
+| Scheduler Service | 📐 設計完成 | 排程服務設計文件（Draft），定時任務、cron、通知管道、工具風險分級 |
 | Phase 1 | 未開始 | Production Orchestrator + PostgreSQL + Alembic |
 | Phase 2 | 📐 設計完成 | LangChain Deep Agents 容器 + S3Backend + PostgresStore |
 | Phase 3 | 未開始 | Production API Gateway + JWT/OAuth2 + Slack/LINE/Teams adapters |
@@ -213,6 +214,7 @@
 - [07-部署指南](./docs/07-deployment.md) - 本地開發、Helm 部署、監控與日誌
 - [08-故障恢復](./docs/08-fault-recovery.md) - 異常情況處理、重試策略、災難恢復
 - [09-Agent 工具](./docs/09-agent-tools.md) - 工具分組、沙箱機制、CWA 氣象查詢、新增工具指南
+- [10-排程服務](./docs/10-scheduler-service.md) - 定時任務、cron 表達式、通知管道、工具風險分級（Draft）
 - [前端串接 API](./docs/frontend-api.md) - 前端串接完整 API 文件
 
 ## 快速開始（POC）
@@ -310,7 +312,7 @@ KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name agent-poc
 dbt-openclaw/
 ├── README.md                          # 本文件
 ├── CLAUDE.md                          # Claude Code 指引
-├── docs/                              # 設計文檔（01-09）+ 前端 API 文件
+├── docs/                              # 設計文檔（01-10）+ 前端 API 文件
 │   ├── 01-requirements-spec.md
 │   ├── 02-api-design.md
 │   ├── 03-data-model.md
@@ -320,6 +322,7 @@ dbt-openclaw/
 │   ├── 07-deployment.md
 │   ├── 08-fault-recovery.md
 │   ├── 09-agent-tools.md             # Agent 工具（分組、沙箱、CWA 氣象、新增指南）
+│   ├── 10-scheduler-service.md       # 排程服務（定時任務、cron、通知、風險分級）— Draft
 │   └── frontend-api.md               # 前端串接 API 文件
 ├── poc/                               # POC 實作（已驗證）
 │   ├── gateway/
