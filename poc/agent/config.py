@@ -76,7 +76,7 @@ class AgentConfig:
     database_url: str = field(
         default_factory=lambda: os.getenv(
             "AGENT_DATABASE_URL",
-            "postgresql://postgres:REDACTED@host.docker.internal:5432/claw_data",
+            "postgresql://postgres:changeme@host.docker.internal:5432/claw_data",
         )
     )
 

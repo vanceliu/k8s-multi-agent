@@ -32,9 +32,9 @@ spec:
         - name: ADMIN_SERVICE_HOST
           value: "http://admin.agent-platform.svc.cluster.local"
         - name: POC_STATIC_TOKEN
-          value: "REDACTED_USER_TOKEN"
+          value: ""  # Set via K8s Secret in production
         - name: POC_ADMIN_TOKEN
-          value: "REDACTED_ADMIN_TOKEN"
+          value: ""  # Set via K8s Secret in production
         - name: STORAGE_SERVICE_HOST
           value: "http://storage-service.agent-platform.svc.cluster.local"
         livenessProbe:

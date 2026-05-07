@@ -162,7 +162,7 @@
 
 ### Admin Service API（透過 Gateway proxy，`/api/v1/admin/*`）
 
-> Admin token: `Authorization: Bearer REDACTED_ADMIN_TOKEN`
+> Admin token: `Authorization: Bearer $POC_ADMIN_TOKEN`
 > Base URL 與 Gateway 相同：`http://localhost:8000`
 
 | Method | Endpoint | 說明 |
@@ -184,8 +184,8 @@
 
 ### Storage Service API（透過 Gateway proxy，`/api/v1/workspaces/{wid}/storage/*`）
 
-> User token: `Authorization: Bearer REDACTED_USER_TOKEN:{user_id}`（操作自己有權限的 workspace）
-> Admin token: `Authorization: Bearer REDACTED_ADMIN_TOKEN`（操作所有 workspace）
+> User token: `Authorization: Bearer $POC_STATIC_TOKEN:{user_id}`（操作自己有權限的 workspace）
+> Admin token: `Authorization: Bearer $POC_ADMIN_TOKEN`（操作所有 workspace）
 > Base URL 與 Gateway 相同：`http://localhost:8000`
 
 | Method | Endpoint | 說明 |
@@ -273,31 +273,31 @@ kubectl get pods,svc -n agent-platform
 # 健康檢查
 curl -s http://localhost:8000/health
 
-# 建立工作區（Token 格式：REDACTED_USER_TOKEN:{user_id}）
+# 建立工作區（Token 格式：$POC_STATIC_TOKEN:{user_id}）
 curl -s -X POST http://localhost:8000/api/v1/workspaces/ensure \
-  -H "Authorization: Bearer REDACTED_USER_TOKEN:testuser1" \
+  -H "Authorization: Bearer $POC_STATIC_TOKEN:testuser1" \
   -H "Content-Type: application/json" \
   -d '{"session_id": "sess-001"}'
 
 # 透過 Channel 層對話（推薦）
 curl -s -X POST http://localhost:8000/api/v1/chat \
-  -H "Authorization: Bearer REDACTED_USER_TOKEN:testuser1" \
+  -H "Authorization: Bearer $POC_STATIC_TOKEN:testuser1" \
   -H "Content-Type: application/json" \
   -d '{"message":"你好","session_id":"sess-001"}'
 
 # 透過 Gateway proxy 呼叫 Agent MCP
 curl -s -X POST http://localhost:8000/workspaces/ws-testuser1/mcp/execute \
-  -H "Authorization: Bearer REDACTED_USER_TOKEN:testuser1" \
+  -H "Authorization: Bearer $POC_STATIC_TOKEN:testuser1" \
   -H "Content-Type: application/json" \
   -d '{"method":"list_files","params":{"path":"data"}}'
 
 # 列出 session
 curl -s http://localhost:8000/api/v1/sessions \
-  -H "Authorization: Bearer REDACTED_USER_TOKEN:testuser1"
+  -H "Authorization: Bearer $POC_STATIC_TOKEN:testuser1"
 
 # 查看對話歷史
 curl -s http://localhost:8000/api/v1/sessions/sess-001/messages \
-  -H "Authorization: Bearer REDACTED_USER_TOKEN:testuser1"
+  -H "Authorization: Bearer $POC_STATIC_TOKEN:testuser1"
 
 # 自動化 E2E 測試
 bash poc/tests/e2e_test.sh
@@ -483,7 +483,7 @@ ChannelManager 偵測 Agent 不可達
 
 | 項目 | POC | Production |
 |------|-----|------------|
-| 認證 | Static token (`REDACTED_USER_TOKEN:{user_id}`) | JWT / OAuth2 |
+| 認證 | Static token (env var `POC_STATIC_TOKEN`) | JWT / OAuth2 |
 | 資料庫 | PostgreSQL (asyncpg) | PostgreSQL 14+ + Alembic migrations |
 | K8s 環境 | kind + Podman | EKS / GKE / AKS |
 | Agent 容器 | create_supervisor + create_react_agent（research_agent + code_agent）+ LocalBackend (PVC)，fallback: create_agent + SkillsInjectionMiddleware | LangChain Deep Agents + S3Backend |
@@ -497,7 +497,7 @@ ChannelManager 偵測 Agent 不可達
 | IM Channel | WebChannel only | + Slack / LINE / Teams |
 | Workspace 類型 | personal（自動建立）/ group（Admin 預建），Pod 掛載 personal + group PVC | 同左 |
 | 存取控制 | workspace_members 表（owner/admin/member/readonly），Admin Service 管理 | 同左 + JWT role claim |
-| Admin 認證 | Static admin token (`REDACTED_ADMIN_TOKEN`) | JWT + admin role + IP 白名單 |
+| Admin 認證 | Static admin token (env var `POC_ADMIN_TOKEN`) | JWT + admin role + IP 白名單 |
 | 部署方式 | 全部容器化，五元件皆在 K8s 內（Gateway, Orchestrator, Admin, Storage Service, Agent） | 同左 + Helm chart |
 
 ## POC 驗證結果

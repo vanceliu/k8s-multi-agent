@@ -44,7 +44,7 @@ curl -s http://localhost:8000/health
 
 # 建立工作區
 curl -s -X POST http://localhost:8000/api/v1/workspaces/ensure \
-  -H "Authorization: Bearer REDACTED_USER_TOKEN:testuser1" \
+  -H "Authorization: Bearer $POC_STATIC_TOKEN:testuser1" \
   -H "Content-Type: application/json" \
   -d '{"session_id": "sess-001"}'
 

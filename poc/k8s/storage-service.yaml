@@ -29,13 +29,13 @@ spec:
           protocol: TCP
         env:
         - name: DATABASE_URL
-          value: "postgresql+asyncpg://postgres:REDACTED@host.docker.internal:5432/claw_data"
+          value: ""  # Set via K8s Secret in production
         - name: K8S_NAMESPACE
           value: "agent-platform"
         - name: POC_STATIC_TOKEN
-          value: "REDACTED_USER_TOKEN"
+          value: ""  # Set via K8s Secret in production
         - name: POC_ADMIN_TOKEN
-          value: "REDACTED_ADMIN_TOKEN"
+          value: ""  # Set via K8s Secret in production
         livenessProbe:
           httpGet:
             path: /health

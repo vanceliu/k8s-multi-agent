@@ -1,7 +1,7 @@
 """Storage Service authentication — dual mode: user token + admin token.
 
-User token format: REDACTED_USER_TOKEN:{user_id} → (user_id, "user")
-Admin token format: REDACTED_ADMIN_TOKEN → ("admin", "admin")
+User token format: $POC_STATIC_TOKEN:{user_id} → (user_id, "user")
+Admin token format: $POC_ADMIN_TOKEN → ("admin", "admin")
 """
 
 from fastapi import HTTPException

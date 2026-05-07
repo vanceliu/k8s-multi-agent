@@ -55,7 +55,7 @@ def _extract_files(text: str, session_id: str | None = None) -> list[dict]:
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+asyncpg://postgres:REDACTED@host.docker.internal:5432/claw_data",
+    "postgresql+asyncpg://postgres:changeme@host.docker.internal:5432/claw_data",
 )
 
 # Convert SQLAlchemy-style URL to psycopg-style for checkpointer

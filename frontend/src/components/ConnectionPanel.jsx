@@ -149,7 +149,7 @@ export default function ConnectionPanel() {
                 value={adminToken}
                 onChange={(e) => setAdminToken(e.target.value)}
                 disabled={adminConnected}
-                placeholder="REDACTED_ADMIN_TOKEN"
+                placeholder="admin-token"
                 className="mt-1 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm font-mono dark:text-gray-200 focus:border-blue-500 focus:outline-none disabled:bg-gray-100 dark:disabled:bg-gray-600"
               />
             </label>

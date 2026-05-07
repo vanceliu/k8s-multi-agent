@@ -86,8 +86,8 @@ Detailed backend API documentation is in `frontend-api.md`:
 
 - The `frontend/dist/` directory is gitignored (not committed). Run `npm run build` to generate it locally.
 - Default POC credentials are hardcoded in AppContext:
-  - Gateway: token `REDACTED_USER_TOKEN:testuser1`, base URL `http://localhost:8000`
-  - Admin Service: token `REDACTED_ADMIN_TOKEN`
+  - Gateway: token `$POC_STATIC_TOKEN:testuser1`, base URL `http://localhost:8000`
+  - Admin Service: token `$POC_ADMIN_TOKEN`
 - Admin Service is a separate Pod accessible via Gateway proxy (`/api/v1/admin/*`). No direct connection needed.
 - Storage Service is a separate Pod (`:8091`, ClusterIP) accessible via Gateway proxy (`/api/v1/workspaces/storage/*`, `/api/v1/workspaces/{wid}/storage/*`).
 - No `.env` files — Vite's `VITE_*` env var convention is available but unused.

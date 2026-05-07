@@ -3,13 +3,13 @@
 import os
 
 # Auth
-STATIC_TOKEN = os.getenv("POC_STATIC_TOKEN", "REDACTED_USER_TOKEN")
-ADMIN_STATIC_TOKEN = os.getenv("POC_ADMIN_TOKEN", "REDACTED_ADMIN_TOKEN")
+STATIC_TOKEN = os.getenv("POC_STATIC_TOKEN", "")
+ADMIN_STATIC_TOKEN = os.getenv("POC_ADMIN_TOKEN", "")
 
 # DB
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+asyncpg://postgres:REDACTED@localhost:5432/claw_data",
+    "postgresql+asyncpg://postgres:changeme@localhost:5432/claw_data",
 )
 
 # K8s
@@ -62,7 +62,7 @@ CLEANUP_JOB_TTL_SECONDS = int(os.getenv("CLEANUP_JOB_TTL_SECONDS", "60"))
 
 # CWA (Central Weather Administration) Open Data API
 CWA_API_BASE = os.getenv("CWA_API_BASE", "https://opendata.cwa.gov.tw/api/v1/rest/datastore")
-CWA_API_KEY = os.getenv("CWA_API_KEY", "REDACTED_CWA_KEY")
+CWA_API_KEY = os.getenv("CWA_API_KEY")
 
 # Agent Debug
 AGENT_DEBUG = os.getenv("AGENT_DEBUG", "false")
@@ -70,8 +70,8 @@ AGENT_DEBUG = os.getenv("AGENT_DEBUG", "false")
 # Agent LLM (supervisor)
 AGENT_MODEL = os.getenv("AGENT_MODEL", "glm-5.1")
 AGENT_MODEL_PROVIDER = os.getenv("AGENT_MODEL_PROVIDER", "openai")
-OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "REDACTED_API_BASE")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "REDACTED_API_KEY")
+OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Agent LLM (sub-agents: research_agent, code_agent)
 # Falls back to supervisor settings when not explicitly set.

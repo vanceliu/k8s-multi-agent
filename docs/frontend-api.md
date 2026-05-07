@@ -5,7 +5,7 @@
 | 項目 | 值 |
 |------|-----|
 | Base URL | `http://localhost:8000` (POC) / `https://api.yourdomain.com` (Production) |
-| 認證方式 | Bearer Token（POC: `REDACTED_USER_TOKEN:{user_id}`） |
+| 認證方式 | Bearer Token（POC: `$POC_STATIC_TOKEN:{user_id}`） |
 | Content-Type | `application/json` |
 | Swagger UI | `http://localhost:8000/docs` |
 
@@ -14,7 +14,7 @@
 所有 API 都需要在 Header 帶上 Bearer Token：
 
 ```
-Authorization: Bearer REDACTED_USER_TOKEN:testuser1
+Authorization: Bearer $POC_STATIC_TOKEN:testuser1
 ```
 
 Production 環境將改為 JWT / OAuth2。
@@ -45,7 +45,7 @@ Production 環境將改為 JWT / OAuth2。
 ### Admin Service API（透過 Gateway proxy 存取）
 
 > Admin Service 是獨立 Pod（:8090, ClusterIP），前端透過 Gateway proxy（`/api/v1/admin/*`）統一存取。
-> 認證方式：`Authorization: Bearer REDACTED_ADMIN_TOKEN`
+> 認證方式：`Authorization: Bearer $POC_ADMIN_TOKEN`
 
 | #  | Method | Endpoint | 說明 |
 |----|--------|----------|------|
@@ -1077,11 +1077,11 @@ Admin Service 是獨立的 FastAPI Pod（:8090, ClusterIP），前端透過 Gate
 |------|-----|
 | Base URL | `http://localhost:8000`（與 Gateway 相同） |
 | 路由前綴 | `/api/v1/admin/*` |
-| 認證方式 | Bearer Token（POC: `REDACTED_ADMIN_TOKEN`） |
+| 認證方式 | Bearer Token（POC: `$POC_ADMIN_TOKEN`） |
 | Swagger UI（Admin 直連） | `kubectl port-forward svc/admin -n agent-platform 8090:80` → `http://localhost:8090/docs` |
 
 ```
-Authorization: Bearer REDACTED_ADMIN_TOKEN
+Authorization: Bearer $POC_ADMIN_TOKEN
 ```
 
 ---
@@ -1369,7 +1369,7 @@ DELETE /api/v1/admin/workspaces/{workspace_id}/members/{user_id}
 
 ```
 DELETE /api/v1/admin/workspaces/{workspace_id}
-Authorization: Bearer REDACTED_ADMIN_TOKEN
+Authorization: Bearer $POC_ADMIN_TOKEN
 ```
 
 **說明：** 刪除工作區及所有相關資源。流程：Admin Service → Storage Service（刪除 PVC）→ Orchestrator（刪除 DB 記錄 + K8s Pod/Service）。

@@ -32,7 +32,7 @@ spec:
         - name: STORAGE_SERVICE_HOST
           value: "http://storage-service.agent-platform.svc.cluster.local"
         - name: POC_ADMIN_TOKEN
-          value: "REDACTED_ADMIN_TOKEN"
+          value: ""  # Set via K8s Secret in production
         livenessProbe:
           httpGet:
             path: /health

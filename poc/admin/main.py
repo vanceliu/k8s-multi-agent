@@ -4,7 +4,7 @@ Provides user management, workspace oversight, PVC management,
 and workspace member role management. All operations proxy through
 Orchestrator API — Admin Service never touches K8s directly.
 
-POC auth: static admin token (REDACTED_ADMIN_TOKEN).
+POC auth: static admin token (env var POC_ADMIN_TOKEN).
 Production: JWT with admin role claim + IP whitelist.
 """
 
@@ -26,7 +26,7 @@ svc = AdminService()
 
 app = FastAPI(
     title="Admin Service POC",
-    description="Admin token: `REDACTED_ADMIN_TOKEN`",
+    description="Admin token: env var `POC_ADMIN_TOKEN`",
 )
 
 

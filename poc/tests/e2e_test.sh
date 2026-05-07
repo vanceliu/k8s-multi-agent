@@ -4,8 +4,8 @@
 set -euo pipefail
 
 GATEWAY="http://localhost:8000"
-TOKEN="REDACTED_USER_TOKEN"
-ADMIN_TOKEN="REDACTED_ADMIN_TOKEN"
+TOKEN="${POC_STATIC_TOKEN:?Set POC_STATIC_TOKEN env var}"
+ADMIN_TOKEN="${POC_ADMIN_TOKEN:?Set POC_ADMIN_TOKEN env var}"
 USER_A="testuser1"
 WORKSPACE_A="ws-${USER_A}"
 SESSION_A="sess-a-$(date +%s)"

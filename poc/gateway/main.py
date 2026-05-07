@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="API Gateway POC",
     lifespan=lifespan,
-    description="Token format: `REDACTED_USER_TOKEN:{user_id}` (e.g. `REDACTED_USER_TOKEN:testuser1`)",
+    description="Token format: `$POC_STATIC_TOKEN:{user_id}`",
 )
 
 app.add_middleware(

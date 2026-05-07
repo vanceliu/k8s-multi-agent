@@ -91,7 +91,7 @@ kubectl apply -f poc/k8s/storage-service.yaml
 # 6. Test (Gateway exposed at localhost:8000 via NodePort 30080)
 curl -s http://localhost:8000/health
 curl -s -X POST http://localhost:8000/api/v1/workspaces/ensure \
-  -H "Authorization: Bearer REDACTED_USER_TOKEN:testuser1" \
+  -H "Authorization: Bearer $POC_STATIC_TOKEN:testuser1" \
   -H "Content-Type: application/json" \
   -d '{"session_id": "sess-001"}'
 
@@ -227,7 +227,7 @@ All under `docs/`, numbered 01-10. These are the source of truth for production 
 
 | 項目 | POC | Production |
 |------|-----|------------|
-| 認證 | Static token (`REDACTED_USER_TOKEN:{user_id}`) | JWT / OAuth2 |
+| 認證 | Static token (env var `POC_STATIC_TOKEN`) | JWT / OAuth2 |
 | 資料庫 | PostgreSQL (asyncpg) | PostgreSQL 14+ + Alembic migrations |
 | K8s 環境 | kind + Podman | EKS / GKE / AKS |
 | Agent 容器 | create_supervisor + create_react_agent（research_agent + code_agent）+ LocalBackend (PVC)，fallback: create_agent + SkillsInjectionMiddleware | LangChain Deep Agents + S3Backend + PostgresSaver |
@@ -248,7 +248,7 @@ All under `docs/`, numbered 01-10. These are the source of truth for production 
 | Skills | 5 個 bundled skills（daily-summary, docx, pdf, pptx, xlsx），三層優先級載入（shared > bundled > workspace） | 同左 + 管理介面 |
 | 檔案操作 | Storage Service 雙模式（Pod 在線 proxy / 離線 K8s Job），`/api/v1/workspaces/{wid}/storage/files/*` | 同左（S3 presigned URL） |
 | 部署方式 | 全部容器化，五元件皆在 K8s 內（Gateway, Orchestrator, Admin, Storage Service, Agent） | 同左 + Helm chart |
-| Admin 認證 | Static admin token (`REDACTED_ADMIN_TOKEN`) | JWT + admin role + IP 白名單 |
+| Admin 認證 | Static admin token (env var `POC_ADMIN_TOKEN`) | JWT + admin role + IP 白名單 |
 | 監控/TLS/Helm | 無 | Prometheus, TLS, Helm chart |
 
 ## Implementation Status

@@ -1,6 +1,7 @@
 """Kubernetes client wrapper — creates/deletes Pod, Service per workspace."""
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -212,7 +213,7 @@ class K8sClient:
                             client.V1EnvVar(name="CWA_API_KEY", value=CWA_API_KEY),
                             client.V1EnvVar(
                                 name="AGENT_DATABASE_URL",
-                                value="postgresql://postgres:REDACTED@host.docker.internal:5432/claw_data",
+                                value=os.getenv("DATABASE_URL", "").replace("+asyncpg", ""),
                             ),
                             client.V1EnvVar(
                                 name="POD_NAME",

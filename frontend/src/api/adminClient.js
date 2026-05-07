@@ -7,7 +7,7 @@ import { ApiError } from './client';
  *
  * @param {Object} options
  * @param {string} options.baseUrl - Gateway base URL (與一般 API 相同)
- * @param {string} options.token - Admin Bearer token (POC: REDACTED_ADMIN_TOKEN)
+ * @param {string} options.token - Admin Bearer token (env var POC_ADMIN_TOKEN)
  */
 export function createAdminApiClient({ baseUrl, token } = {}) {
   const headers = () => ({
