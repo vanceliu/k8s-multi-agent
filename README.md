@@ -9,13 +9,15 @@
 | 階段 | 狀態 | 說明 |
 |------|------|------|
 | POC | ✅ 已完成 | 全部容器化部署於 K8s，Supervisor + Sub-Agent 架構（langgraph-supervisor），E2E 測試通過 |
-| Channel Layer | ✅ 已完成 | IM channel 抽象層（WebChannel），`/api/v1/chat` endpoint |
+| Channel Layer | ✅ 已完成 | IM channel 抽象層（WebChannel + LINEChannel），`/api/v1/chat` endpoint |
 | Admin Service | ✅ 已完成 | 獨立 Pod (:8090, ClusterIP)，Gateway proxy `/api/v1/admin/*` 統一入口，user/workspace/member 管理 |
 | Storage Service | ✅ 已完成 | 獨立 Pod (:8091, ClusterIP)，Gateway proxy `/api/v1/workspaces/{wid}/storage/*`，workspace storage CRUD + 檔案操作（雙模式）+ 存取權限 |
+| ModelFactory | ✅ 已完成 | YAML config + ModelFactory strategy pattern，多模型支援（MiniMax/DeepSeek/GLM/Claude/OpenAI），output normalizer + post_model_hook |
+| Context Compaction | ✅ 已完成 | 自動對話壓縮，token 超過 75% context window 時觸發 Memory Flush + Summarize，保留近期對話 |
 | Scheduler Service | 📐 設計完成 | 排程服務設計文件（Draft），定時任務、cron、通知管道、工具風險分級 |
 | Phase 1 | 未開始 | Production Orchestrator + PostgreSQL + Alembic |
 | Phase 2 | 📐 設計完成 | LangChain Deep Agents 容器 + S3Backend + PostgresStore |
-| Phase 3 | 未開始 | Production API Gateway + JWT/OAuth2 + Slack/LINE/Teams adapters |
+| Phase 3 | 未開始 | Production API Gateway + JWT/OAuth2 + Slack/Teams adapters |
 | Phase 4 | 未開始 | Helm、監控、TLS、負載測試 |
 
 ## 核心設計決策
@@ -162,7 +164,7 @@
 
 ### Admin Service API（透過 Gateway proxy，`/api/v1/admin/*`）
 
-> Admin token: `Authorization: Bearer $POC_ADMIN_TOKEN`
+> Admin token: `Authorization: Bearer poc-admin-token-12345`
 > Base URL 與 Gateway 相同：`http://localhost:8000`
 
 | Method | Endpoint | 說明 |
@@ -184,8 +186,8 @@
 
 ### Storage Service API（透過 Gateway proxy，`/api/v1/workspaces/{wid}/storage/*`）
 
-> User token: `Authorization: Bearer $POC_STATIC_TOKEN:{user_id}`（操作自己有權限的 workspace）
-> Admin token: `Authorization: Bearer $POC_ADMIN_TOKEN`（操作所有 workspace）
+> User token: `Authorization: Bearer poc-test-token-12345:{user_id}`（操作自己有權限的 workspace）
+> Admin token: `Authorization: Bearer poc-admin-token-12345`（操作所有 workspace）
 > Base URL 與 Gateway 相同：`http://localhost:8000`
 
 | Method | Endpoint | 說明 |
@@ -215,6 +217,8 @@
 - [08-故障恢復](./docs/08-fault-recovery.md) - 異常情況處理、重試策略、災難恢復
 - [09-Agent 工具](./docs/09-agent-tools.md) - 工具分組、沙箱機制、CWA 氣象查詢、新增工具指南
 - [10-排程服務](./docs/10-scheduler-service.md) - 定時任務、cron 表達式、通知管道、工具風險分級（Draft）
+- [11-記憶系統](./docs/11-memory-system.md) - SQLite FTS5 索引、Active Memory 自動召回
+- [12-對話壓縮](./docs/12-context-compaction.md) - 自動對話歷史壓縮、Memory Flush、摘要生成
 - [前端串接 API](./docs/frontend-api.md) - 前端串接完整 API 文件
 
 ## 快速開始（POC）
@@ -273,31 +277,31 @@ kubectl get pods,svc -n agent-platform
 # 健康檢查
 curl -s http://localhost:8000/health
 
-# 建立工作區（Token 格式：$POC_STATIC_TOKEN:{user_id}）
+# 建立工作區（Token 格式：poc-test-token-12345:{user_id}）
 curl -s -X POST http://localhost:8000/api/v1/workspaces/ensure \
-  -H "Authorization: Bearer $POC_STATIC_TOKEN:testuser1" \
+  -H "Authorization: Bearer poc-test-token-12345:testuser1" \
   -H "Content-Type: application/json" \
   -d '{"session_id": "sess-001"}'
 
 # 透過 Channel 層對話（推薦）
 curl -s -X POST http://localhost:8000/api/v1/chat \
-  -H "Authorization: Bearer $POC_STATIC_TOKEN:testuser1" \
+  -H "Authorization: Bearer poc-test-token-12345:testuser1" \
   -H "Content-Type: application/json" \
   -d '{"message":"你好","session_id":"sess-001"}'
 
 # 透過 Gateway proxy 呼叫 Agent MCP
 curl -s -X POST http://localhost:8000/workspaces/ws-testuser1/mcp/execute \
-  -H "Authorization: Bearer $POC_STATIC_TOKEN:testuser1" \
+  -H "Authorization: Bearer poc-test-token-12345:testuser1" \
   -H "Content-Type: application/json" \
   -d '{"method":"list_files","params":{"path":"data"}}'
 
 # 列出 session
 curl -s http://localhost:8000/api/v1/sessions \
-  -H "Authorization: Bearer $POC_STATIC_TOKEN:testuser1"
+  -H "Authorization: Bearer poc-test-token-12345:testuser1"
 
 # 查看對話歷史
 curl -s http://localhost:8000/api/v1/sessions/sess-001/messages \
-  -H "Authorization: Bearer $POC_STATIC_TOKEN:testuser1"
+  -H "Authorization: Bearer poc-test-token-12345:testuser1"
 
 # 自動化 E2E 測試
 bash poc/tests/e2e_test.sh
@@ -312,7 +316,7 @@ KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name agent-poc
 dbt-openclaw/
 ├── README.md                          # 本文件
 ├── CLAUDE.md                          # Claude Code 指引
-├── docs/                              # 設計文檔（01-10）+ 前端 API 文件
+├── docs/                              # 設計文檔（01-13）+ 前端 API 文件
 │   ├── 01-requirements-spec.md
 │   ├── 02-api-design.md
 │   ├── 03-data-model.md
@@ -323,6 +327,9 @@ dbt-openclaw/
 │   ├── 08-fault-recovery.md
 │   ├── 09-agent-tools.md             # Agent 工具（分組、沙箱、CWA 氣象、新增指南）
 │   ├── 10-scheduler-service.md       # 排程服務（定時任務、cron、通知、風險分級）— Draft
+│   ├── 11-memory-system.md           # 記憶系統（SQLite FTS5、Active Memory）
+│   ├── 12-context-compaction.md      # 對話壓縮（Memory Flush + Summarize）
+│   ├── 13-user-bindings.md           # 多平台身份綁定（LINE/Slack/Teams）
 │   └── frontend-api.md               # 前端串接 API 文件
 ├── poc/                               # POC 實作（已驗證）
 │   ├── gateway/
@@ -351,21 +358,29 @@ dbt-openclaw/
 │   ├── agent/
 │   │   ├── main.py                    # Agent 入口（asyncio + signal handling）
 │   │   ├── config.py                  # AgentConfig dataclass
-│   │   ├── runtime.py                 # DeepAgentsRuntime（LangGraph ReAct）
+│   │   ├── runtime.py                 # DeepAgentsRuntime（Supervisor + Sub-Agent）
+│   │   ├── model_factory.py           # ModelFactory（per-model LLM 初始化 + normalizer + post_model_hook）
 │   │   ├── http_server.py             # FastAPI HTTP 層（chat/files/mcp）
 │   │   ├── tools.py                   # SandboxedShellTool, SandboxedPythonREPLTool, LoggingSearchTool, CWAWeatherTool
 │   │   ├── skills/                    # 內建 skill 定義
 │   │   │   ├── daily-summary/         # 每日活動摘要
 │   │   │   ├── docx/                  # Word 文件產生
+│   │   │   ├── memory-management/     # 記憶管理
 │   │   │   ├── pdf/                   # PDF 文件產生
 │   │   │   ├── pptx/                  # PowerPoint 簡報產生
+│   │   │   ├── weekly-report/         # 週報產生
 │   │   │   └── xlsx/                  # Excel 試算表產生
+│   │   ├── compaction/                # Context Compaction（自動對話壓縮）
+│   │   │   ├── counter.py            # Token 估算 + context window 對照表
+│   │   │   ├── compactor.py          # 壓縮核心邏輯（memory flush + summarize）
+│   │   │   └── prompts.py            # Prompt 模板
 │   │   └── backends/
 │   │       └── local.py               # LocalBackend（PVC 檔案操作）
 │   ├── db/
-│   │   ├── models.py                  # 6 張表 ORM（含 workspace_members）
+│   │   ├── models.py                  # 8 張表 ORM（含 workspace_members, user_bindings, binding_verifications）
 │   │   └── session.py                 # PostgreSQL async session
-│   ├── utils/config.py                # 設定（env vars, 含 CWA_API_KEY/CWA_API_BASE/AGENT_DISPLAY_MODE）
+│   ├── utils/config.py                # 設定（YAML + env vars 覆蓋）
+│   ├── config.yaml                    # 結構化預設配置檔（env vars 優先覆蓋）
 │   ├── docker/
 │   │   ├── Dockerfile.agent
 │   │   ├── Dockerfile.orchestrator
@@ -383,12 +398,10 @@ dbt-openclaw/
 │   ├── tests/
 │   │   ├── e2e_test.sh
 │   │   ├── e2e_admin_test.sh
-│   │   └── e2e_storage_test.sh
+│   │   ├── e2e_storage_test.sh
+│   │   ├── test_memory_service.py
+│   │   └── test_compaction.py
 │   └── requirements.txt
-├── app/                               # Production 源碼（規劃中）
-├── infra/k8s/                         # Production K8s manifests（規劃中）
-├── helm/                              # Helm Chart（規劃中）
-└── scripts/                           # 運維腳本（規劃中）
 ```
 
 ## 主要流程圖
@@ -475,15 +488,15 @@ ChannelManager 偵測 Agent 不可達
 
 ### IM Channel Layer
 - 架構：Channel ABC → MessageBus (async queue) → ChannelManager (dispatcher)
-- 目前：WebChannel（HTTP request-response via asyncio.Future）
-- 未來：Slack / LINE / Teams adapters（registry stubs ready）
+- 目前：WebChannel（HTTP request-response via asyncio.Future）+ LINEChannel（webhook + LIFF 綁定）
+- 未來：Slack / Teams adapters（registry stubs ready）
 - 所有 IM 訊息統一為 InboundMessage/OutboundMessage，Agent 不知道訊息來源
 
 ## POC 簡化說明（vs Production 設計）
 
 | 項目 | POC | Production |
 |------|-----|------------|
-| 認證 | Static token (env var `POC_STATIC_TOKEN`) | JWT / OAuth2 |
+| 認證 | Static token (`poc-test-token-12345:{user_id}`) | JWT / OAuth2 |
 | 資料庫 | PostgreSQL (asyncpg) | PostgreSQL 14+ + Alembic migrations |
 | K8s 環境 | kind + Podman | EKS / GKE / AKS |
 | Agent 容器 | create_supervisor + create_react_agent（research_agent + code_agent）+ LocalBackend (PVC)，fallback: create_agent + SkillsInjectionMiddleware | LangChain Deep Agents + S3Backend |
@@ -491,13 +504,14 @@ ChannelManager 偵測 Agent 不可達
 | 閒置超時 | 10 分鐘 | 30 分鐘 |
 | 儲存 | PVC（personal 掛載 `/workspace/{wid}`，shared 掛載 `/shared/{wid}`） | AWS S3（IRSA + S3Backend） |
 | Session 工具隔離 | Per-session agent cache，Shell/Python cwd 強制為 `sessions/{sid}/` | S3Backend session-scoped prefix |
-| Skills | 5 個 bundled skills，三層優先級載入（shared > bundled > workspace） | 同左 + 管理介面 |
+| Skills | 7 個 bundled skills（daily-summary, docx, memory-management, pdf, pptx, weekly-report, xlsx），三層優先級載入（shared > bundled > workspace） | 同左 + 管理介面 |
 | 檔案操作 | Storage Service 雙模式（Pod 在線 proxy / 離線 K8s Job），`/api/v1/workspaces/{wid}/storage/files/*` | 同左（S3 presigned URL） |
 | Checkpointer | AsyncPostgresSaver | 同左 |
-| IM Channel | WebChannel only | + Slack / LINE / Teams |
+| Context Compaction | TokenCounter 估算 + ContextCompactor（memory flush + summarize） | 同左 + tiktoken 精確計數 |
+| IM Channel | WebChannel + LINEChannel | + Slack / Teams |
 | Workspace 類型 | personal（自動建立）/ group（Admin 預建），Pod 掛載 personal + group PVC | 同左 |
 | 存取控制 | workspace_members 表（owner/admin/member/readonly），Admin Service 管理 | 同左 + JWT role claim |
-| Admin 認證 | Static admin token (env var `POC_ADMIN_TOKEN`) | JWT + admin role + IP 白名單 |
+| Admin 認證 | Static admin token (`poc-admin-token-12345`) | JWT + admin role + IP 白名單 |
 | 部署方式 | 全部容器化，五元件皆在 K8s 內（Gateway, Orchestrator, Admin, Storage Service, Agent） | 同左 + Helm chart |
 
 ## POC 驗證結果
@@ -505,7 +519,7 @@ ChannelManager 偵測 Agent 不可達
 以下項目已在 kind + Podman 環境中全部驗證通過：
 
 - ✅ Gateway / Orchestrator / Agent 全部容器化部署於 K8s
-- ✅ LangGraph ReAct Agent + Tool Calling（list/read/write workspace files）
+- ✅ Supervisor + Sub-Agent 架構（research_agent + code_agent）+ Tool Calling（list/read/write workspace files）
 - ✅ IM Channel 抽象層（WebChannel → MessageBus → ChannelManager → Agent）
 - ✅ PostgreSQL Checkpointer（對話記憶跨 request 保留）
 - ✅ 首次登入建立 Pod + Service + PVC
@@ -525,5 +539,6 @@ ChannelManager 偵測 Agent 不可達
 - ✅ NetworkPolicy（agent→gateway+storage-service ingress, orchestrator→gateway+admin+storage-service+agent ingress, storage-service→gateway+orchestrator+admin ingress）
 - ✅ 台灣氣象查詢工具（CWAWeatherTool，中央氣象署開放資料 API，整合至 research_agent，支援 36h/一週預報、即時觀測、即時雨量）
 - ✅ SSE Display Mode（`AGENT_DISPLAY_MODE`：`normal` 僅 content，`full_history` 含 tool_call/tool_result 事件）
+- ✅ Context Compaction（自動對話壓縮：TokenCounter 估算 + ContextCompactor memory flush + summarize，保留近期 6 輪完整對話，SSE events: compaction_start / compaction_memory_flush / compaction_complete）
 
 詳見各文檔與 [前端串接 API 文件](./docs/frontend-api.md)。

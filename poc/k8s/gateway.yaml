@@ -32,11 +32,17 @@ spec:
         - name: ADMIN_SERVICE_HOST
           value: "http://admin.agent-platform.svc.cluster.local"
         - name: POC_STATIC_TOKEN
-          value: ""  # Set via K8s Secret in production
+          value: "poc-test-token-12345"
         - name: POC_ADMIN_TOKEN
-          value: ""  # Set via K8s Secret in production
+          value: "poc-admin-token-12345"
         - name: STORAGE_SERVICE_HOST
           value: "http://storage-service.agent-platform.svc.cluster.local"
+        - name: LINE_CHANNEL_SECRET
+          value: ""
+        - name: LINE_CHANNEL_ACCESS_TOKEN
+          value: ""
+        - name: DATABASE_URL
+          value: "postgresql+asyncpg://postgres:postgres@host.docker.internal:5432/claw_data"
         livenessProbe:
           httpGet:
             path: /health

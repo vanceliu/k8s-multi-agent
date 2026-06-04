@@ -1,8 +1,10 @@
 # 10 排程服務（Scheduler Service）
 
-> **狀態**：討論稿（Draft），尚未進入實作階段。
+> **狀態**：討論稿（Draft），尚未進入實作階段（POC 尚未實作）。
 
 本文件描述使用者定時任務的排程機制設計，解決「Pod 閒置回收後，如何在指定時間喚醒 Pod 並執行任務」的問題。
+
+設計參考 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 的 cron job 子系統（`cron/jobs.py` + `cron/scheduler.py`），吸收其多種 schedule 格式、`attach_skills`、`model_override`、`pre_script`、`context_from`（job DAG）、`deliver_to`（多目的地投遞）、`skip_memory`、framing header/footer 等成熟設計，與 dbt-openclaw 既有的 K8s 多租戶 + Dispatcher/Worker 架構整合。詳見 `refer_docs/04-hermes-agent-comparison.md`。
 
 > **與其他文件的關係**：
 > - 05-lifecycle.md：Pod 生命週期（idle reaping、ensure 流程）
@@ -10,6 +12,9 @@
 > - 09-agent-tools.md：Agent 工具定義（新增 CreateScheduleTool）
 > - 02-api-design.md：API 端點設計（新增 `/api/v1/schedules/*`）
 > - 03-data-model.md：資料模型（新增 `scheduled_tasks` 表）
+> - 11-memory-system.md：`skip_memory` 短路 MemoryService 寫入路徑
+> - 13-user-bindings.md：`deliver_to` 的 `to: "self"` 透過 `user_bindings` 查目標 platform_uid
+> - Channel Layer（`poc/gateway/channels/`）：`deliver_to` 直接重用既有 channel adapters
 
 ---
 
@@ -84,6 +89,8 @@ Client → API Gateway (:8000)
 | POC | Orchestrator 內建 | 1 | 在 Orchestrator 加 scheduler loop，最快落地 |
 | Production v1 | Dispatcher + Worker（獨立 Service） | 2-3 | DB as Queue，水平擴展 |
 | Production v2 | 外部排程 + Worker | auto-scale | AWS EventBridge + SQS，大規模場景 |
+
+> POC 即支援 Hermes 風格的進階 cron 欄位：`attach_skills`、`model_override`、`pre_script`、`context_from`（DAG）、`deliver_to`、`skip_memory`、`framing`。schema 一次到位，避免日後 migration 痛點；實作可依需求漸進啟用（NULL 表示走預設行為）。
 
 ### 2.4 Dispatcher + Worker 架構（Production）
 
@@ -222,23 +229,47 @@ CREATE TABLE scheduled_tasks (
     user_id VARCHAR(255) NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
     workspace_id VARCHAR(255) NOT NULL REFERENCES workspaces(workspace_id) ON DELETE CASCADE,
 
-    -- 排程定義
+    -- 基本資訊
     name VARCHAR(255) NOT NULL,                       -- 顯示名稱，如「每日天氣通知」
-    cron_expr VARCHAR(255) NOT NULL,                  -- Cron 表達式，如 "0 8 * * *"
-    timezone VARCHAR(100) NOT NULL DEFAULT 'Asia/Taipei',  -- 使用者時區
     prompt TEXT NOT NULL,                             -- 要送給 Agent 的 prompt
+
+    -- 排程定義（Hermes 風格：多格式統一）
+    schedule_format VARCHAR(20) NOT NULL,             -- 'duration' / 'every_phrase' / 'cron' / 'iso_timestamp'
+    schedule_expr TEXT NOT NULL,                      -- 對應的表達式
+                                                      --   duration: '5m' / '2h'
+                                                      --   every_phrase: 'every monday 9am' / 'every day 08:00'
+                                                      --   cron: '0 8 * * *'
+                                                      --   iso_timestamp: '2026-05-05T08:00:00+08:00'
+    timezone VARCHAR(100) NOT NULL DEFAULT 'Asia/Taipei',  -- 使用者時區
     lead_time_minutes INTEGER NOT NULL DEFAULT 5,     -- 提前喚醒時間（分鐘）
 
     -- 排程模式
     schedule_type VARCHAR(50) NOT NULL DEFAULT 'recurring',  -- 'recurring' / 'one_shot'
+                                                             -- iso_timestamp 自動視為 one_shot
 
-    -- 通知設定
-    notification_channel VARCHAR(50) NOT NULL DEFAULT 'pull',  -- 'pull' / 'email' / 'slack' / 'webhook'
-    notification_config JSONB,                        -- 管道特定設定（email 地址、webhook URL 等）
+    -- Hermes 風格進階欄位
+    attach_skills JSONB,                              -- skill 名稱陣列，執行時掛載
+                                                      -- 範例: ["daily-summary", "xlsx"]
+    model_override VARCHAR(255),                      -- 覆寫 LLM model (e.g. 'claude-sonnet-4-6')
+    provider_override VARCHAR(100),                   -- 覆寫 LLM provider (e.g. 'anthropic')
+    pre_script TEXT,                                  -- 執行 prompt 前先跑的 shell 腳本
+                                                      -- stdout 自動注入 effective_prompt
+    context_from JSONB,                               -- 上游 job 的 task_id 陣列（DAG）
+                                                      -- 範例: ["sched-collect-weekly-data"]
+                                                      -- 執行時自動載入上游最近一次成功 result
+    deliver_to JSONB NOT NULL,                        -- 投遞目的地清單，取代 notification_channel
+                                                      -- 結構見 §3.2
+    skip_memory BOOLEAN NOT NULL DEFAULT TRUE,        -- True: 不寫入 workspace memory
+    workdir VARCHAR(255),                             -- Agent 工作目錄，預設 sessions/sched-exec-{task_id}/
+    framing JSONB,                                    -- header/footer 訊息，維持 role alternation
+                                                      -- 結構見 §3.3
+    authorized_tools JSONB,                           -- 高風險工具授權清單，見 §12.5
+                                                      -- 範例: {"level_1": ["book_restaurant"], ...}
 
     -- 狀態（one_shot 執行完自動設為 'disabled'）
     status VARCHAR(50) NOT NULL DEFAULT 'enabled',    -- 'enabled' / 'disabled' / 'deleted'
-    execution_status VARCHAR(50) DEFAULT 'idle',      -- 'idle' / 'waking' / 'running' / 'completed' / 'failed'
+    execution_status VARCHAR(50) DEFAULT 'idle',      -- 'idle' / 'waking' / 'running' / 'blocked' / 'completed' / 'failed'
+                                                      -- blocked: 上游 context_from job 尚無 success result
     next_run_at TIMESTAMP WITH TIME ZONE,             -- 下次執行時間（UTC）
     last_run_at TIMESTAMP WITH TIME ZONE,             -- 上次執行時間
     last_result TEXT,                                 -- 上次執行結果摘要
@@ -256,7 +287,50 @@ CREATE TABLE scheduled_tasks (
 );
 ```
 
-### 3.2 Table: task_executions（DB as Queue）
+> **與舊設計的差異**：
+> - 舊版 `cron_expr` 已併入 `schedule_format='cron'` + `schedule_expr`
+> - 舊版 `notification_channel` + `notification_config` 已由 `deliver_to` JSONB 取代
+> - 一次性排程改用 `schedule_format='iso_timestamp'`，不再有獨立的 `run_at` 欄位
+
+### 3.2 `deliver_to` 結構
+
+統一描述「執行結果要投遞到哪些目的地」，**直接重用 Channel Layer adapters**（`poc/gateway/channels/`），不重複造輪子。
+
+```json
+{
+  "targets": [
+    {"channel": "line",    "to": "self",                       "format": "text"},
+    {"channel": "email",   "to": "user@example.com",           "format": "html"},
+    {"channel": "webhook", "to": "https://hooks.example.com/x", "format": "json"},
+    {"channel": "pull"}
+  ],
+  "on_failure": "pull"
+}
+```
+
+| 欄位 | 必填 | 說明 |
+|---|---|---|
+| `targets[].channel` | ✓ | `pull` / `web` / `line` / `slack` / `teams` / `email` / `webhook`（對應 Channel Layer adapter） |
+| `targets[].to` | 視 channel 而定 | `pull` 不需要；IM/Email 可填 `"self"`（透過 `user_bindings` 查目標）或具體地址；webhook 填 URL |
+| `targets[].format` | 否 | `text` / `markdown` / `html` / `json`，預設 `text` |
+| `on_failure` | 否 | 所有 target 都投遞失敗時的兜底通道，預設 `pull`（結果永遠存得到 DB） |
+
+> **`to: "self"` 的解析**：執行時由 Worker 透過 `user_bindings` 表查詢該 user 在指定 platform 的 active 綁定，取出 `platform_uid` 作為投遞目標。若 binding 不存在或為 inactive，該 target 視為失敗，走 `on_failure`。
+
+### 3.3 `framing` 結構
+
+維持對話 role alternation（避免 LLM 看到連續 assistant message），對應 Hermes 的 header/footer framing。
+
+```json
+{
+  "header": "system: 以下為自動排程任務，請以正式語氣回覆。",
+  "footer": "system: 結束。請輸出 markdown 格式的摘要。"
+}
+```
+
+Worker 組裝 `effective_prompt` 時，header/footer 會包夾在主 prompt 與上游 context 外層（見 §5.6）。
+
+### 3.4 Table: task_executions（DB as Queue）
 
 Worker 消費的任務佇列，由 Dispatcher 寫入，Worker 搶佔執行。
 
@@ -267,12 +341,17 @@ CREATE TABLE task_executions (
     user_id VARCHAR(255) NOT NULL,
     workspace_id VARCHAR(255) NOT NULL,
     scheduled_at TIMESTAMP WITH TIME ZONE NOT NULL,   -- 原定執行時間
-    prompt TEXT NOT NULL,
-    notification_channel VARCHAR(50) NOT NULL,
-    notification_config JSONB,
+    prompt TEXT NOT NULL,                             -- scheduled_tasks.prompt 的快照
+    deliver_to JSONB NOT NULL,                        -- scheduled_tasks.deliver_to 的快照
+
+    -- Hermes 進階欄位的執行快照
+    upstream_results JSONB,                           -- 從 context_from 載入的上游 result 快照
+                                                      -- 凍結於執行時刻，便於重現
+    effective_prompt TEXT,                            -- 組裝後的最終 prompt（含 framing/upstream/pre_script 輸出）
+                                                      -- 主要供 debug 與 audit
 
     -- Queue 狀態
-    status VARCHAR(50) NOT NULL DEFAULT 'queued',     -- 'queued' / 'picked' / 'executing' / 'done' / 'failed'
+    status VARCHAR(50) NOT NULL DEFAULT 'queued',     -- 'queued' / 'picked' / 'executing' / 'done' / 'failed' / 'blocked'
     picked_by VARCHAR(255),                            -- Worker replica ID
     picked_at TIMESTAMP WITH TIME ZONE,
     completed_at TIMESTAMP WITH TIME ZONE,
@@ -286,9 +365,9 @@ CREATE TABLE task_executions (
 );
 ```
 
-### 3.3 Table: scheduled_task_results
+### 3.5 Table: scheduled_task_results
 
-儲存每次執行的詳細結果，供使用者查閱歷史及 Pull 模式通知。
+儲存每次執行的詳細結果，供使用者查閱歷史及 `pull` 通道兜底。
 
 ```sql
 CREATE TABLE scheduled_task_results (
@@ -305,9 +384,15 @@ CREATE TABLE scheduled_task_results (
     result_text TEXT,                                  -- Agent 回覆內容
     error_message TEXT,                                -- 錯誤訊息
 
-    -- 通知狀態
-    notification_status VARCHAR(50) DEFAULT 'pending', -- 'pending' / 'sent' / 'failed' / 'read'
+    -- Delivery 狀態（取代舊的 notification_status 單一欄位）
+    notification_status VARCHAR(50) DEFAULT 'pending', -- 'pending' / 'sent' / 'partial' / 'failed' / 'read'
+                                                       -- 語意：所有 deliver_to.targets 的綜合狀態
+                                                       --   sent: 全部成功
+                                                       --   partial: 部分成功
+                                                       --   failed: 全部失敗（已走 on_failure）
     notified_at TIMESTAMP WITH TIME ZONE,
+    delivery_log JSONB,                                -- 每個 target 的個別投遞狀態
+                                                       -- [{"channel":"line","to":"...","status":"sent","at":"..."},...]
 
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -326,15 +411,45 @@ CREATE TABLE scheduled_task_results (
 
 **描述**：建立排程任務（也可由 Agent tool 呼叫）
 
-**請求**：
+**請求**（最小範例）：
 ```json
 {
   "name": "每日天氣通知",
-  "cron_expr": "0 8 * * *",
+  "schedule_format": "every_phrase",
+  "schedule_expr": "every day 08:00",
   "timezone": "Asia/Taipei",
   "prompt": "請查詢今天台北的天氣預報，包含溫度、降雨機率、建議穿著",
-  "notification_channel": "pull",
-  "notification_config": null
+  "deliver_to": {
+    "targets": [{"channel": "line", "to": "self", "format": "text"}],
+    "on_failure": "pull"
+  }
+}
+```
+
+**請求**（完整範例，含 Hermes 進階欄位）：
+```json
+{
+  "name": "每週週報產生",
+  "schedule_format": "every_phrase",
+  "schedule_expr": "every friday 17:00",
+  "timezone": "Asia/Taipei",
+  "prompt": "根據上游收集的本週活動資料，撰寫週報，輸出為 docx 檔案",
+  "attach_skills": ["daily-summary", "docx"],
+  "model_override": "claude-sonnet-4-6",
+  "pre_script": "ls -la ~/workspace/data/weekly/ | head -20",
+  "context_from": ["sched-collect-weekly-data"],
+  "skip_memory": true,
+  "framing": {
+    "header": "system: 以下為自動週報任務，請以正式語氣回覆。",
+    "footer": "system: 結束。請輸出 markdown 摘要。"
+  },
+  "deliver_to": {
+    "targets": [
+      {"channel": "email", "to": "self", "format": "html"},
+      {"channel": "email", "to": "boss@example.com", "format": "html"}
+    ],
+    "on_failure": "pull"
+  }
 }
 ```
 
@@ -343,11 +458,15 @@ CREATE TABLE scheduled_task_results (
 {
   "task_id": "sched-a1b2c3d4",
   "name": "每日天氣通知",
-  "cron_expr": "0 8 * * *",
+  "schedule_format": "every_phrase",
+  "schedule_expr": "every day 08:00",
   "timezone": "Asia/Taipei",
   "next_run_at": "2026-05-05T00:00:00Z",
   "status": "enabled",
-  "notification_channel": "pull"
+  "deliver_to": {
+    "targets": [{"channel": "line", "to": "self", "format": "text"}],
+    "on_failure": "pull"
+  }
 }
 ```
 
@@ -364,12 +483,17 @@ CREATE TABLE scheduled_task_results (
     {
       "task_id": "sched-a1b2c3d4",
       "name": "每日天氣通知",
-      "cron_expr": "0 8 * * *",
+      "schedule_format": "every_phrase",
+      "schedule_expr": "every day 08:00",
       "timezone": "Asia/Taipei",
       "next_run_at": "2026-05-05T00:00:00Z",
       "status": "enabled",
       "last_run_at": "2026-05-04T00:00:00Z",
-      "last_result": "台北今天晴天，氣溫 26-32°C，降雨機率 10%..."
+      "last_result": "台北今天晴天，氣溫 26-32°C，降雨機率 10%...",
+      "deliver_to": {
+        "targets": [{"channel": "line", "to": "self"}],
+        "on_failure": "pull"
+      }
     }
   ]
 }
@@ -379,7 +503,7 @@ CREATE TABLE scheduled_task_results (
 
 #### PATCH /api/v1/schedules/{task_id}
 
-**描述**：更新排程任務（修改 cron、prompt、啟用/停用等）
+**描述**：更新排程任務（修改 schedule、prompt、deliver_to、啟用/停用等）
 
 **請求**：
 ```json
@@ -406,7 +530,7 @@ CREATE TABLE scheduled_task_results (
 
 #### GET /api/v1/schedules/notifications
 
-**描述**：取得未讀的排程執行結果（Pull 模式）
+**描述**：取得未讀的排程執行結果（**僅對 `deliver_to.targets` 含 `pull` 或走 `on_failure: pull` 的結果**）
 
 **響應** (200 OK)：
 ```json
@@ -417,7 +541,11 @@ CREATE TABLE scheduled_task_results (
       "task_name": "每日天氣通知",
       "scheduled_at": "2026-05-04T00:00:00Z",
       "result_text": "台北今天晴天，氣溫 26-32°C...",
-      "execution_status": "completed"
+      "execution_status": "completed",
+      "delivery_log": [
+        {"channel": "line", "to": "U1234...", "status": "failed", "at": "..."},
+        {"channel": "pull", "status": "sent", "at": "..."}
+      ]
     }
   ],
   "count": 1
@@ -508,7 +636,9 @@ CREATE TABLE scheduled_task_results (
 | Pod ready 超時 | 同上 |
 | Agent 執行超時 | 設定單次執行 timeout（預設 120 秒），超時標記 failed |
 | Agent 回覆錯誤 | 記錄錯誤，標記 failed，`consecutive_failures += 1` |
-| 通知發送失敗 | 結果仍存 DB（Pull 模式兜底），通知標記 `notification_status = 'failed'` |
+| 通知發送失敗 | 結果仍存 DB（`on_failure: pull` 兜底），`delivery_log` 記錄個別 target 狀態 |
+| 上游 job 無 success result | `context_from` 指定的上游 job 還沒成功執行過 → 標記 `execution_status = 'blocked'`，下次掃描重試（最多重試 N 次後標記 failed） |
+| pre_script 執行失敗 | 收集 stderr 寫入 `error_message`，但仍嘗試執行主 prompt（pre_script 為輔助，非必要） |
 | 連續失敗 N 次 | `consecutive_failures >= 5` 時自動停用任務，通知使用者 |
 
 ### 5.5 啟動補掃
@@ -524,56 +654,190 @@ WHERE status = 'enabled'
 
 對這些任務立即執行（跳過 lead_time 等待），確保重啟期間的任務不會遺漏。
 
+### 5.6 Job 執行管線（Hermes 風格）
+
+Worker 從 `task_executions` 搶到任務後的完整管線。每個步驟對應 §3.1 的進階欄位：
+
+```
+Worker 取到任務（status: queued → picked）
+  │
+  ├─ 1. [上游 context 載入] context_from
+  │     對每個 upstream task_id：
+  │       SELECT result_text FROM scheduled_task_results
+  │       WHERE task_id = $upstream
+  │         AND execution_status = 'completed'
+  │       ORDER BY completed_at DESC LIMIT 1
+  │     全部缺漏 → execution_status = 'blocked'，下次重試
+  │     部分缺漏 → 仍可執行，缺漏 upstream 略過
+  │     凍結快照寫入 task_executions.upstream_results
+  │
+  ├─ 2. [Pre-script 執行] pre_script
+  │     在 Agent Pod 的 SandboxedShellTool 內執行 pre_script
+  │     timeout 5 秒，stdout 截斷至 4KB
+  │     收集 stdout 為 script_output（stderr 寫 error_message 但不中斷）
+  │     ※ 安全防護：禁止 rm -rf / curl 任意外部 URL（見 §12.7）
+  │
+  ├─ 3. [Prompt 組裝]
+  │     effective_prompt = (
+  │         framing.header                    ← 若有
+  │       + "\n## Upstream context\n" + json(upstream_results)  ← 若有
+  │       + "\n## Pre-script output\n" + script_output           ← 若有
+  │       + "\n## Task\n" + prompt
+  │       + "\n" + framing.footer             ← 若有
+  │     )
+  │     寫入 task_executions.effective_prompt（debug / audit 用）
+  │
+  ├─ 4. [Model 解析] model_override / provider_override
+  │     ModelFactory.create_model(
+  │         model = model_override or workspace.default_model,
+  │         provider = provider_override or workspace.default_provider,
+  │     )
+  │     僅作用於此次執行，不影響使用者即時對話
+  │
+  ├─ 5. [Skill 注入] attach_skills
+  │     依列表載入 skill metadata（三層優先級：shared > bundled > workspace）
+  │     透過 session context message 注入給 Supervisor
+  │     未列出的 skill 不可見（縮小決策空間，提升穩定性）
+  │
+  ├─ 6. [Memory mode] skip_memory
+  │     skip_memory = True（預設）→ Agent runtime 偵測 execution_context.skip_memory
+  │       → MemoryService.save() 短路（不寫入 workspace memory）
+  │       → 但仍寫 sessions/sched-exec-{task_id}/（檔案層級可追溯）
+  │     skip_memory = False → 走標準路徑，會影響使用者長期記憶
+  │
+  ├─ 7. [執行] 送 effective_prompt 給 Agent
+  │     workdir = scheduled_tasks.workdir or "sessions/sched-exec-{task_id}/"
+  │     session_id = "sched-exec-{task_id}-{timestamp}"（隔離，見 §11.2）
+  │     timeout = SCHEDULER_TASK_TIMEOUT_SECONDS（預設 120）
+  │     收集 result_text
+  │
+  ├─ 8. [投遞] deliver_to.targets
+  │     對每個 target：
+  │       channel == "pull"     → 寫 scheduled_task_results, delivery_log 記 sent
+  │       channel == "line"     → resolve to (self → user_bindings 查 platform_uid)
+  │                              → Channel Layer LineChannel.send(OutboundMessage)
+  │       channel == "email"    → EmailChannel.send(SMTP)
+  │       channel == "webhook"  → POST result_text 到 URL
+  │       ...
+  │     全部失敗 → 走 on_failure（預設 pull，永遠存得到）
+  │     delivery_log 逐筆記錄 {channel, to, status, at, error?}
+  │     彙整 notification_status: sent / partial / failed
+  │
+  └─ 9. [收尾]
+        recurring  → next_run_at = parse_schedule(schedule_format, schedule_expr, timezone)
+        one_shot   → status = 'disabled'
+        execution_status = 'idle'
+        task_executions.status = 'done' / 'failed'
+```
+
+> **關鍵設計原則**：
+> - 上游 context 與 pre_script output **不是**「執行授權依據」（避免間接 prompt injection 提升權限，見 §12.8）
+> - `effective_prompt` 全文持久化便於 audit；敏感資料應由 prompt 設計時就避免帶入
+> - 任何步驟失敗皆不影響 `pull` 兜底，使用者永遠取得到結果（或錯誤訊息）
+
 ---
 
-## 6. 通知管道
+## 6. Delivery Channels（投遞通道）
 
-### 6.1 通知模式
+排程執行結果透過 `deliver_to.targets` 指定一個或多個目的地。**直接重用 Channel Layer adapters**（`poc/gateway/channels/`），與使用者即時對話走同一套訊息基礎設施，不重複造輪子。
 
-| 模式 | notification_channel | 說明 | 實作優先級 |
-|------|---------------------|------|-----------|
-| Pull | `pull` | 結果存 DB，使用者上線時主動推送未讀結果 | POC |
-| Email | `email` | SMTP 寄信 | Production v1 |
-| Webhook | `webhook` | POST 結果到使用者指定 URL | Production v1 |
-| Slack | `slack` | 透過 Channel Layer Slack adapter 推送 | Production v2 |
-| LINE | `line` | 透過 Channel Layer LINE adapter 推送 | Production v2 |
+### 6.1 支援的 Channel
 
-### 6.2 Pull 模式流程
+| Channel | 對應 adapter | POC | Production | 說明 |
+|---|---|---|---|---|
+| `pull` | （無，存 DB） | ✓ | ✓ | 兜底通道；結果寫 `scheduled_task_results`，使用者上線取 |
+| `web` | WebChannel | ✓ | ✓ | SSE 推送至前端 web client |
+| `line` | LineChannel | ✓（依 13 設計） | ✓ | 透過 `user_bindings` 解析 `platform_uid` |
+| `slack` | SlackChannel | — | ✓ | 同上 |
+| `teams` | TeamsChannel | — | ✓ | 同上 |
+| `email` | EmailChannel（新） | — | ✓ | SMTP；支援 `text` / `html` format |
+| `webhook` | WebhookChannel（新） | — | ✓ | POST 結果到使用者指定 URL，預設 `json` format |
+
+> **`pull` 永遠保證可用**：即使 `deliver_to.targets` 沒列 `pull`，所有結果仍寫入 `scheduled_task_results`（差別只在 `notification_status` 標記），確保使用者永遠取得到。`on_failure: pull` 是兜底語意：當其他 target 全失敗時主動標記為 unread。
+
+### 6.2 Delivery 流程（重用 Channel Layer）
+
+Worker 完成 Agent 執行後：
+
+```
+collect result_text
+  │
+  ├─→ 對每個 target ∈ deliver_to.targets：
+  │     1. resolve target.to（"self" → user_bindings 查 platform_uid）
+  │     2. 包成 OutboundMessage:
+  │          OutboundMessage(
+  │              chat_id=resolved_to,
+  │              user_id=task.user_id,
+  │              text=result_text,
+  │              format=target.format or "text",
+  │              metadata={"source": "scheduler", "task_id": ...}
+  │          )
+  │     3. MessageBus.publish(channel=target.channel, message=OutboundMessage)
+  │     4. 對應 adapter（LineChannel / SlackChannel / ...）接手投遞
+  │     5. 記錄結果到 delivery_log
+  │
+  ├─ 若所有 target 失敗：
+  │     觸發 on_failure 通道（預設 pull）
+  │     確保結果至少存得到 DB
+  │
+  └─ 彙整 notification_status (sent / partial / failed)
+```
+
+### 6.3 `to: "self"` 解析
+
+IM channel（line/slack/teams/email）常見的用法：使用者只想推給自己。`"self"` 表示由系統查詢綁定關係：
+
+```python
+def resolve_self(user_id: str, platform: str) -> str | None:
+    """從 user_bindings 查 user 在 platform 的 active 綁定。"""
+    binding = db.query(UserBinding).filter(
+        UserBinding.user_id == user_id,
+        UserBinding.platform == platform,
+        UserBinding.status == "active",
+    ).first()
+    return binding.platform_uid if binding else None
+```
+
+- 找不到綁定 / binding 為 `inactive` → 該 target 失敗，走 `on_failure`
+- 使用者重新綁定後（13-user-bindings.md 的 unfollow → follow 恢復流程），下次排程自動跟著走，不需修改排程定義
+
+### 6.4 Server-initiated Push
+
+現有 Channel Layer 是 request-response 模式（使用者發訊息 → 等回覆）。排程通知需要 **server-initiated push**（無 InboundMessage 對應的 OutboundMessage）：
+
+```
+Scheduler → MessageBus.publish(channel="line", OutboundMessage(...))
+  → ChannelManager 路由到 LineChannel
+  → LineChannel.send(OutboundMessage) ← 直接呼叫 LINE Messaging API push
+```
+
+這需要每個 channel adapter 提供 `send(OutboundMessage)` 介面（非 reply-only）。WebChannel 之外的 adapter（LINE / Slack / Teams）天然支援 push API；POC 階段先做 `pull` + `web` + `line`，Production 補齊 `email` / `webhook` / `slack` / `teams`。
+
+### 6.5 Pull 通道流程（兜底語意）
 
 ```
 排程執行完畢
   → 結果寫入 scheduled_task_results（notification_status = 'pending'）
+  → delivery_log 記錄各 target 投遞狀態
 
 使用者下次上線（ensure workspace）
-  → Orchestrator 或 Gateway 檢查該使用者是否有未讀結果
+  → Orchestrator 或 Gateway 檢查該使用者是否有 unread pull 結果
   → 有的話，在 ensure 回應中附帶 unread_notifications count
   → 前端顯示通知 badge
   → 使用者點擊查看 → GET /api/v1/schedules/notifications
   → 標記已讀 → POST /api/v1/schedules/notifications/read
 ```
 
-### 6.3 Push 模式流程（以 Email 為例）
+### 6.6 Format 對應
 
-```
-排程執行完畢
-  → 結果寫入 scheduled_task_results
-  → Scheduler 讀取 notification_config（email 地址）
-  → 組合郵件內容（任務名稱 + Agent 回覆 + 執行時間）
-  → SMTP 發送
-  → 更新 notification_status = 'sent'
-```
+| format | 適用 channel | 說明 |
+|---|---|---|
+| `text` | 全部 | 純文字（預設） |
+| `markdown` | web / slack / line（轉換為 Flex Message） | Markdown 語法 |
+| `html` | email | HTML 郵件 |
+| `json` | webhook | 結構化 payload，含 metadata |
 
-### 6.4 與 Channel Layer 的整合
-
-現有 Channel Layer 是 request-response 模式（使用者發訊息 → 等回覆）。排程通知需要 **server-initiated push**：
-
-```
-Scheduler → MessageBus.publish(OutboundMessage)
-  → ChannelManager 路由到對應 channel adapter
-  → Slack/LINE adapter 主動推送給使用者
-```
-
-這需要 Channel Layer 支援「無 InboundMessage 的 OutboundMessage」，即系統主動發起的訊息。這是 Channel Layer 的自然延伸，但需要額外設計。
+Adapter 收到不支援的 format 時，自動 fallback 到 `text`。
 
 ---
 
@@ -581,7 +845,7 @@ Scheduler → MessageBus.publish(OutboundMessage)
 
 使用者在對話中自然地建立排程，而非手動呼叫 API。
 
-### 7.1 對話範例
+### 7.1 對話範例（基本）
 
 ```
 使用者：每天早上 8 點告訴我今天台北的天氣
@@ -589,40 +853,85 @@ Agent（Supervisor）：好的，我幫你建立一個每日天氣通知排程�
   → 呼叫 CreateScheduleTool
   → {
       "name": "每日天氣通知",
-      "cron_expr": "0 8 * * *",
+      "schedule_format": "every_phrase",
+      "schedule_expr": "every day 08:00",
       "timezone": "Asia/Taipei",
-      "prompt": "請查詢今天台北的天氣預報，包含溫度、降雨機率、紫外線指數，並給出穿著建議"
+      "prompt": "請查詢今天台北的天氣預報，包含溫度、降雨機率、紫外線指數，並給出穿著建議",
+      "deliver_to": {"targets": [{"channel": "pull"}]}
     }
-Agent：已建立排程「每日天氣通知」，每天早上 8:00 (台灣時間) 會自動查詢天氣並通知你。
-      目前通知方式為「下次上線時推送」，你也可以設定 Email 或 Slack 通知。
+Agent：已建立排程「每日天氣通知」，每天早上 8:00 (台灣時間) 會自動查詢天氣。
+      目前通知方式為「下次上線時推送」，你也可以告訴我要推到 LINE 或 Email。
 ```
 
-### 7.2 Tool 定義
+### 7.2 對話範例（多目的地 + skill + DAG）
+
+```
+使用者：每週五下午 5 點用 daily-summary skill 寫週報，寄 email 給我和 boss
+Agent → CreateScheduleTool({
+  "name": "週報產生與寄送",
+  "schedule_format": "every_phrase",
+  "schedule_expr": "every friday 17:00",
+  "timezone": "Asia/Taipei",
+  "prompt": "請根據本週的活動資料撰寫週報，輸出 markdown 格式",
+  "attach_skills": ["daily-summary", "docx"],
+  "context_from": ["sched-collect-weekly-data"],
+  "skip_memory": true,
+  "deliver_to": {
+    "targets": [
+      {"channel": "email", "to": "self",              "format": "html"},
+      {"channel": "email", "to": "boss@example.com",  "format": "html"}
+    ],
+    "on_failure": "pull"
+  }
+})
+Agent：已建立每週週報排程。每週五 17:00 會：
+  1. 載入「每週資料收集」排程的最新成果（context_from）
+  2. 用 daily-summary 和 docx 兩個 skill 寫週報
+  3. 同步寄 HTML email 給你和 boss@example.com
+  寄送失敗時結果仍會保留在你的通知列表。
+```
+
+### 7.3 Tool 定義
 
 ```python
 class CreateScheduleTool(BaseTool):
     """建立定時排程任務。
-    
+
     使用者在對話中表達定時需求時，由 Supervisor 呼叫此工具。
     工具會透過 Scheduler Service API 建立排程。
     """
     name: str = "create_schedule"
     description: str = (
         "建立定時排程任務。當使用者要求定期執行某件事時使用。"
-        "例如：每天早上告知天氣、每週一產生週報、每小時檢查系統狀態。"
-        "需要提供任務名稱、cron 表達式、時區、要執行的 prompt。"
+        "例如：每天早上告知天氣、每週一產生週報、每小時檢查系統狀態、明天下午 3 點提醒開會。"
+        ""
+        "必要參數："
+        "- name: 排程顯示名稱"
+        "- schedule_format: 'duration' / 'every_phrase' / 'cron' / 'iso_timestamp'"
+        "- schedule_expr: 對應的表達式（如 '5m'、'every monday 9am'、'0 8 * * *'、'2026-05-05T08:00:00+08:00'）"
+        "- prompt: 排程到期時要送給 Agent 的指令"
+        "- deliver_to: 投遞目的地清單，{targets: [{channel, to?, format?}], on_failure?}"
+        ""
+        "進階參數（可選）："
+        "- timezone: 預設 Asia/Taipei"
+        "- attach_skills: 執行時要掛載的 skill 名稱陣列"
+        "- model_override / provider_override: 覆寫此 job 的 LLM"
+        "- pre_script: 執行 prompt 前先跑的 shell 腳本（stdout 注入 context）"
+        "- context_from: 上游 job 的 task_id 陣列，自動載入其最近成功 result"
+        "- skip_memory: 預設 true，不污染主對話記憶"
+        "- framing: {header, footer}，維持 role alternation"
     )
 ```
 
 **分配給**：Supervisor 直接使用（不分配給 sub-agent），因為排程建立是系統層級操作。
 
-### 7.3 相關 Tools
+### 7.4 相關 Tools
 
 | Tool | 說明 | 分配給 |
 |------|------|--------|
 | `create_schedule` | 建立排程 | Supervisor |
 | `list_schedules` | 列出使用者的排程 | Supervisor |
-| `update_schedule` | 修改排程（含啟用/停用） | Supervisor |
+| `update_schedule` | 修改排程（含啟用/停用、改 deliver_to 等） | Supervisor |
 | `delete_schedule` | 刪除排程 | Supervisor |
 
 ---
@@ -727,12 +1036,20 @@ spec:
 |------|-----|------------|
 | 部署方式 | Orchestrator 內建 scheduler loop | 獨立 Scheduler Service Pod（Dispatcher + Worker） |
 | Replica | 1 | 2-3（每 500 使用者 +1 replica，HPA auto-scale） |
+| Schedule 格式 | duration + every_phrase + cron + iso_timestamp（schema 一次到位） | 同左 |
 | 排程模式 | Recurring + One-Shot | 同左 |
-| 通知管道 | Pull only（存 DB，上線推送） | Pull + Email + Slack + Webhook |
-| Agent Tool | CreateScheduleTool（基本） | + 自然語言 cron 解析 |
+| Attach skills | 支援（三層優先級載入） | 同左 |
+| Model / provider override | 支援（YAML 預設 + per-job 覆寫） | 同左 |
+| Pre-script | sandbox 內執行（5 秒 timeout，4KB stdout 上限） | 同左 + 額外資源限制 |
+| Job DAG (`context_from`) | 支援單層上游 | 多層上游 + cycle detection |
+| Delivery channels | `pull` + `web` + `line` | + `email` + `webhook` + `slack` + `teams` |
+| `to: "self"` 解析 | 透過 user_bindings（LINE only） | 全平台 |
+| `skip_memory` | 預設 True（cron session 不寫入 MemoryService） | 同左 |
+| Framing header/footer | 支援 | 同左 |
+| Agent Tool | CreateScheduleTool（基本 + 進階參數） | + 自然語言 schedule 解析 |
 | 排程執行權限 | Research tools only（read-only） | 同左，可依 resource_tier 放寬 |
 | 認證 | Static token | JWT（複用 Gateway 認證） |
-| 監控 | Log only | Prometheus metrics（queue depth、執行延遲、失敗率） |
+| 監控 | Log only | Prometheus metrics（queue depth、執行延遲、失敗率、delivery 成功率） |
 | 任務上限 | 每使用者 20 個 | 可依 resource_tier 調整 |
 | 併發控制 | 單 replica，無需控制 | DB Queue + FOR UPDATE SKIP LOCKED |
 | 尖峰流量 | 併發限流 | 同左 + 分批預熱 + HPA |
@@ -793,6 +1110,8 @@ Worker 開始執行
 ```
 
 排程 session 不會出現在使用者的「對話歷史」列表中（前端可透過 session_id prefix `sched-exec-` 過濾）。
+
+> **與 Memory 的隔離**：當 `skip_memory=True`（預設）時，排程 session 不會寫入 workspace MemoryService，與使用者即時對話的長期記憶完全隔離。換言之，排程的執行記錄留在 `scheduled_task_results` + `sessions/sched-exec-{task_id}/` 檔案層級，但**不會影響**使用者「上次我們聊到 XXX」的記憶連續性。詳見 11-memory-system.md。
 
 ---
 
@@ -868,15 +1187,21 @@ Worker 開始執行
 
 ### 12.5 資料模型支援
 
-`scheduled_tasks` 表的 `notification_config` JSONB 欄位擴展，記錄授權資訊：
+`scheduled_tasks` 表的 `authorized_tools` JSONB 欄位記錄授權資訊（與 `deliver_to` 完全分離，因為投遞通道與工具授權是兩件獨立的事）：
 
 ```json
 {
-  "notification_channel": "pull",
-  "authorized_tools": {
-    "level_1": ["book_restaurant"],
-    "confirmation_timeout_hours": 24
-  }
+  "level_1": ["book_restaurant"],
+  "confirmation_timeout_hours": 24
+}
+```
+
+對應 `deliver_to` 只描述「結果送去哪」：
+
+```json
+{
+  "targets": [{"channel": "pull"}],
+  "on_failure": "pull"
 }
 ```
 
@@ -935,7 +1260,8 @@ Agent runtime 根據 `execution_context.tool_policy` 決定：
 排程建立時的防護：
 
 - **長度限制**：prompt 最大 2000 字元
-- **敏感詞過濾**：拒絕包含明顯危險指令的 prompt（如 `rm -rf`、`DROP TABLE`、`curl` 外部 URL）
+- **敏感詞過濾**：拒絕包含明顯危險指令的 `prompt` 與 `pre_script`（如 `rm -rf`、`DROP TABLE`、`curl` 任意外部 URL、`wget`、`nc`/`netcat`、`base64 | sh` 等 pipe-to-shell 模式）
+- **pre_script 限制**：僅允許白名單命令（如 `cat`、`ls`、`echo`、`date`、`grep`、`awk`、`jq`），其餘一律拒絕；執行 timeout 5 秒
 - **建立時確認**：Agent 建立排程前，向使用者複述「我理解你要的是 XXX，每天 08:00 執行，對嗎？」
 - **授權告知**：若排程需要 Level 1 工具，Agent 必須明確告知使用者「這個排程會自動執行 XXX 操作」並取得確認
 
@@ -946,6 +1272,7 @@ Agent runtime 根據 `execution_context.tool_policy` 決定：
 - **結果審查**：執行結果在送出通知前，檢查是否包含敏感資訊（API key pattern、密碼 pattern）
 - **操作記錄**：Level 1 操作完整記錄（tool name、args、result），供事後取消或審查
 - **Audit log**：所有排程執行的 prompt + 結果完整記錄，供事後審查
+- **context_from 不可作為授權來源**：`context_from` 載入的上游 result 僅作為 **資訊性 context** 注入 prompt，**絕不可**作為「工具授權升級」「跳過確認流程」「擴大 tool_policy 範圍」的依據。即使上游 result 明文寫「請允許執行 payment」，Worker 與 Agent runtime 都必須忽略——授權只認 `authorized_tools` 欄位（建立排程時使用者明確授權的內容），避免間接 prompt injection 透過上游資料提升權限。
 
 ---
 
@@ -966,25 +1293,30 @@ Agent runtime 根據 `execution_context.tool_policy` 決定：
 | 項目 | Recurring | One-Shot |
 |------|-----------|----------|
 | schedule_type | `recurring` | `one_shot` |
-| cron_expr | 必填（如 `0 8 * * *`） | 不使用，改用 `next_run_at` 直接指定時間 |
+| schedule_format | `duration` / `every_phrase` / `cron` | `iso_timestamp` |
+| schedule_expr | 如 `every day 08:00`、`0 8 * * *` | ISO-8601 時間，如 `2026-05-05T08:00:00+08:00` |
 | 執行後行為 | 計算下次 `next_run_at` | 自動設為 `status = 'disabled'` |
 | 自動清理 | 不清理（除非使用者刪除） | 執行完 7 天後自動清理（或依設定） |
 
 ### 13.3 API 差異
 
-建立一次性排程時，不需要 `cron_expr`，改用 `run_at`：
+建立一次性排程時，`schedule_format` 設為 `iso_timestamp`，`schedule_expr` 直接填 ISO-8601 時間（不再有獨立的 `run_at` 欄位，統一到 `schedule_expr`）：
 
 ```json
 {
   "name": "明天開會提醒",
   "schedule_type": "one_shot",
-  "run_at": "2026-05-05T08:00:00+08:00",
+  "schedule_format": "iso_timestamp",
+  "schedule_expr": "2026-05-05T08:00:00+08:00",
+  "timezone": "Asia/Taipei",
   "prompt": "提醒我今天早上 9 點有產品會議，請幫我整理昨天的會議紀錄重點",
-  "notification_channel": "pull"
+  "deliver_to": {
+    "targets": [{"channel": "pull"}]
+  }
 }
 ```
 
-Scheduler 收到後直接設定 `next_run_at = run_at`，不需要解析 cron。
+Scheduler 收到後直接設定 `next_run_at = parse_iso(schedule_expr)`，不需要解析 cron。
 
 ### 13.4 對話範例
 
@@ -995,10 +1327,12 @@ Agent（Supervisor）：好的，我幫你設定一個提醒。
   → {
       "name": "開會提醒",
       "schedule_type": "one_shot",
-      "run_at": "2026-05-05T08:00:00+08:00",
-      "prompt": "提醒使用者今天有會議要參加"
+      "schedule_format": "iso_timestamp",
+      "schedule_expr": "2026-05-05T08:00:00+08:00",
+      "prompt": "提醒使用者今天有會議要參加",
+      "deliver_to": {"targets": [{"channel": "line", "to": "self"}]}
     }
-Agent：已設定提醒，明天 (5/5) 早上 8:00 會通知你。
+Agent：已設定提醒，明天 (5/5) 早上 8:00 會透過 LINE 通知你。
 ```
 
 ### 13.5 Dispatcher 處理
@@ -1017,7 +1351,7 @@ WHERE status = 'enabled'
 
 ```python
 if task.schedule_type == 'recurring':
-    task.next_run_at = calculate_next_run(task.cron_expr, task.timezone)
+    task.next_run_at = calculate_next_run(task.schedule_format, task.schedule_expr, task.timezone)
     task.execution_status = 'idle'
 elif task.schedule_type == 'one_shot':
     task.status = 'disabled'  # 不再執行
@@ -1028,10 +1362,13 @@ elif task.schedule_type == 'one_shot':
 
 ## 14. 待討論事項
 
-- [ ] **通知管道優先級**：POC 是否只做 Pull，還是需要至少一種 Push（如 Email）？
-- [ ] **Cron 表達式 vs 自然語言**：使用者在對話中說「每天早上 8 點」，Agent 是否需要自行轉換為 cron？還是由 Scheduler Service 提供自然語言解析？
+- [ ] **Schedule 格式解析器歸屬**：自然語言（如「明天早上 8 點」「每週五下午 5 點」）由 Agent 直接轉成 `every_phrase` / `iso_timestamp` / `cron`？還是 Scheduler Service 提供 NL parser endpoint 統一處理？前者簡單但解析品質依賴 LLM；後者可控但需維護 parser。
+- [ ] **DAG 深度限制**：`context_from` 允許多層上游串接嗎？POC 只做單層、不做 cycle detection；Production 是否支援多層 + topological sort + cycle detection？深度上限定多少（如 3 層）？
+- [ ] **deliver_to 投遞重試策略**：單一 target 失敗是否重試？重試幾次（如 3 次、exponential backoff）？所有 target 都失敗才走 `on_failure`，還是任一失敗就走？
+- [ ] **Cron 表達式 vs every_phrase**：兩者表達力重疊，是否在 API 層面強制統一（如只接受 `every_phrase` 與 `cron` 二選一，不允許混用）？
 - [ ] **Group workspace 排程**：群組工作區的排程由誰建立？結果通知所有成員還是只通知建立者？（建議 POC 先不支援 group 排程）
 - [ ] **排程結果的保留期限**：`scheduled_task_results` 要保留多久？需要自動清理機制嗎？
-- [ ] **與 Skill 系統的整合**：排程的 prompt 是否可以觸發 Skill（如每天產生日報 → daily-summary skill）？
-- [ ] **費用控制**：每次排程執行都會消耗 LLM token，是否需要設定每日/每月 token 預算上限？
-- [ ] **可觀測性**：Production 需要哪些 Prometheus metrics？（queue depth、執行延遲、失敗率、Worker 利用率）
+- [ ] **與 Skill 系統的整合**：`attach_skills` 設計已支援，但是否需要 skill 風險分級（某些 skill 不可在排程中使用）？
+- [ ] **費用控制**：每次排程執行都會消耗 LLM token，是否需要設定每日/每月 token 預算上限？`model_override` 是否限制只能選 cost-effective 模型？
+- [ ] **pre_script 命令白名單**：白名單該包含哪些命令？是否需要 per-workspace 自訂白名單？
+- [ ] **可觀測性**：Production 需要哪些 Prometheus metrics？（queue depth、執行延遲、失敗率、Worker 利用率、deliver_to 各 channel 投遞成功率、DAG 上游缺漏率）

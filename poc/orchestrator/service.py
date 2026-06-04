@@ -55,7 +55,7 @@ def _extract_files(text: str, session_id: str | None = None) -> list[dict]:
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+asyncpg://postgres:changeme@host.docker.internal:5432/claw_data",
+    "postgresql+asyncpg://postgres:postgres@host.docker.internal:5432/claw_data",
 )
 
 # Convert SQLAlchemy-style URL to psycopg-style for checkpointer
@@ -252,7 +252,7 @@ class OrchestratorService:
                 ps.sync_status = "synced"
             else:
                 db.add(PodState(
-                    pod_name=pod_name, user_id=user_id,
+                    pod_name=pod_name,
                     workspace_id=workspace_id, desired_state="running",
                     actual_state="pending" if not pod_ready else "running",
                     last_state_update_at=now,

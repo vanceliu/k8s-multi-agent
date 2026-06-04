@@ -22,9 +22,13 @@ from typing import Any
 
 from langchain_core.callbacks import BaseCallbackHandler
 
+from poc.agent.active_memory import ActiveMemoryHook
 from poc.agent.agents.factory import create_supervisor_workflow
 from poc.agent.backends.local import LocalBackend
+from poc.agent.compaction import ContextCompactor, TokenCounter
 from poc.agent.config import AgentConfig
+from poc.agent.memory_service import MemoryService
+from poc.agent.model_factory import ModelFactory, ContentNormalizer, PassthroughNormalizer, build_post_model_hook
 from poc.agent.tools import get_code_tools, get_common_tools, get_research_tools, get_workspace_tools
 
 logger = logging.getLogger(__name__)
@@ -66,9 +70,16 @@ class DeepAgentsRuntime:
         self.backend: LocalBackend | None = None
         self._model = None       # supervisor LLM
         self._sub_model = None   # sub-agent LLM (lightweight)
+        self._model_normalizer: ContentNormalizer = PassthroughNormalizer()
+        self._sub_model_normalizer: ContentNormalizer = PassthroughNormalizer()
         self._checkpointer = None
         self._pg_checkpointer = None
         self._pg_conn = None
+        self._model_factory = ModelFactory()
+
+        self._memory_service: MemoryService | None = None
+        self._active_memory_hook: ActiveMemoryHook | None = None
+        self._compactor: ContextCompactor | None = None
 
         self._shutting_down = False
         self._active_requests = 0
@@ -94,7 +105,10 @@ class DeepAgentsRuntime:
         # 2. Initialize LocalBackend (PVC, no session context at init time)
         self.backend = LocalBackend(self.config.workspace_path)
 
-        # 3. Initialize shared LLM model + checkpointer (heavy, done once)
+        # 3. Initialize Memory Service (SQLite FTS5 on PVC)
+        await self._init_memory_service()
+
+        # 4. Initialize shared LLM model + checkpointer (heavy, done once)
         await self._init_model_and_checkpointer()
 
         logger.info(
@@ -102,36 +116,50 @@ class DeepAgentsRuntime:
             self.workspace_id, self.config.model_name, self.config.sub_agent_model_name,
         )
 
+    async def _init_memory_service(self) -> None:
+        """Initialize MemoryService + ActiveMemoryHook."""
+        try:
+            memories_dir = str(Path(self.config.workspace_path) / "memories")
+            index_path = str(Path(memories_dir) / ".index" / "memory.db")
+
+            self._memory_service = MemoryService(
+                workspace_id=self.workspace_id,
+                memories_dir=memories_dir,
+                index_path=index_path,
+            )
+            await self._memory_service.initialize()
+
+            count = await self._memory_service.reindex()
+            logger.info("Memory service ready (%d entries indexed)", count)
+
+            self._active_memory_hook = ActiveMemoryHook(self._memory_service)
+        except Exception as e:
+            logger.warning("Memory service initialization failed (%s), continuing without memory", e)
+            self._memory_service = None
+            self._active_memory_hook = None
+
     async def _init_model_and_checkpointer(self) -> None:
         """Initialize LLM models and checkpointer (shared across all sessions)."""
         try:
-            from langchain.chat_models import init_chat_model
-
             # Supervisor model (high-capability)
-            model_kwargs = {}
-            if self.config.model_provider == "openai" and self.config.openai_api_base:
-                model_kwargs["base_url"] = self.config.openai_api_base
-
-            self._model = init_chat_model(
-                model=self.config.model_name,
-                model_provider=self.config.model_provider,
+            self._model, self._model_normalizer = self._model_factory.create(
+                model_name=self.config.model_name,
+                provider=self.config.model_provider,
                 temperature=self.config.temperature,
+                api_base=self.config.openai_api_base,
+                api_key=self.config.openai_api_key,
                 callbacks=[LLMRequestLogger()],
-                **model_kwargs,
             )
             logger.info("Supervisor LLM initialized (model=%s)", self.config.model_name)
 
             # Sub-agent model (lightweight, fast)
-            sub_model_kwargs = {}
-            if self.config.sub_agent_model_provider == "openai" and self.config.sub_agent_api_base:
-                sub_model_kwargs["base_url"] = self.config.sub_agent_api_base
-
-            self._sub_model = init_chat_model(
-                model=self.config.sub_agent_model_name,
-                model_provider=self.config.sub_agent_model_provider,
+            self._sub_model, self._sub_model_normalizer = self._model_factory.create(
+                model_name=self.config.sub_agent_model_name,
+                provider=self.config.sub_agent_model_provider,
                 temperature=self.config.sub_agent_temperature,
+                api_base=self.config.sub_agent_api_base,
+                api_key=self.config.sub_agent_api_key,
                 callbacks=[LLMRequestLogger()],
-                **sub_model_kwargs,
             )
             logger.info("Sub-agent LLM initialized (model=%s)", self.config.sub_agent_model_name)
 
@@ -143,6 +171,24 @@ class DeepAgentsRuntime:
             return
 
         self._checkpointer = await self._build_checkpointer()
+
+        # Initialize Context Compactor
+        if self.config.compaction_enabled and self._model:
+            self._compactor = ContextCompactor(
+                model=self._sub_model or self._model,
+                model_name=self.config.sub_agent_model_name or self.config.model_name,
+                memory_service=self._memory_service,
+                threshold_ratio=self.config.compaction_threshold_ratio,
+                target_ratio=self.config.compaction_target_ratio,
+                preserve_recent_turns=self.config.compaction_preserve_turns,
+                min_messages=self.config.compaction_min_messages,
+                memory_flush_enabled=self.config.compaction_memory_flush,
+            )
+            logger.info(
+                "Context compactor initialized (threshold=%.0f%%, preserve=%d turns)",
+                self.config.compaction_threshold_ratio * 100,
+                self.config.compaction_preserve_turns,
+            )
 
     def _get_or_create_agent(self, session_id: str):
         """Return cached supervisor workflow for session, or create one.
@@ -160,8 +206,8 @@ class DeepAgentsRuntime:
             return None
 
         # Collect tools for sub-agents
-        research_tools = get_research_tools()
-        code_tools = get_code_tools(self.config.workspace_path, session_id)
+        research_tools = get_research_tools(memory_service=self._memory_service)
+        code_tools = get_code_tools(self.config.workspace_path, session_id, memory_service=self._memory_service)
         common_tools = get_common_tools(self.workspace_id, self.orchestrator_url)
 
         try:
@@ -181,6 +227,7 @@ class DeepAgentsRuntime:
             workspace_id=self.workspace_id,
             session_id=session_id,
             checkpointer=self._checkpointer,
+            post_model_hook=build_post_model_hook(self._model_normalizer),
         )
         self._session_agents[session_id] = app
         return app
@@ -418,6 +465,129 @@ class DeepAgentsRuntime:
 
         return context
 
+    async def _recall_memory(self, message: str) -> str | None:
+        """Active Memory pre-hook: recall relevant memories and format for injection."""
+        if not self._active_memory_hook:
+            return None
+        context = await self._active_memory_hook.recall(message)
+        if not context:
+            return None
+        return f"<active_memory>\n{context}\n</active_memory>"
+
+    async def _get_checkpoint_messages(self, session_id: str) -> list:
+        """Retrieve current checkpoint messages for a session."""
+        if not self._checkpointer:
+            return []
+        try:
+            config = {"configurable": {"thread_id": session_id}}
+            state = await self._checkpointer.aget(config)
+            if state and "channel_values" in state:
+                return state["channel_values"].get("messages", [])
+        except Exception as e:
+            logger.debug("Failed to get checkpoint messages: %s", e)
+        return []
+
+    async def _apply_compaction(self, session_id: str, agent: Any) -> dict | None:
+        """Check and apply compaction if needed. Returns event dict or None.
+
+        Used by non-streaming invoke; emits no progress events.
+        """
+        if not self._compactor:
+            return None
+
+        checkpoint_msgs = await self._get_checkpoint_messages(session_id)
+        if not checkpoint_msgs or not self._compactor.should_compact(checkpoint_msgs):
+            return None
+
+        token_estimate = self._compactor.get_token_estimate(checkpoint_msgs)
+        logger.info(
+            "Compaction triggered for session %s (%d messages, ~%d tokens)",
+            session_id, len(checkpoint_msgs), token_estimate,
+        )
+
+        compacted_messages = await self._compactor.compact(session_id, checkpoint_msgs)
+
+        await self._write_compacted_checkpoint(session_id, compacted_messages)
+
+        after_tokens = self._compactor.get_token_estimate(compacted_messages)
+        return {
+            "before_tokens": token_estimate,
+            "after_tokens": after_tokens,
+            "message_count": len(checkpoint_msgs),
+        }
+
+    async def _apply_compaction_stream(self, session_id: str, agent: Any):
+        """Streaming variant of _apply_compaction — yields event dicts during compaction.
+
+        Yields {"type": "compaction_start", ...}, {"type": "compaction_memory_flush", ...},
+        and {"type": "compaction_complete", ...} if compaction runs. Yields nothing otherwise.
+        """
+        if not self._compactor:
+            return
+
+        checkpoint_msgs = await self._get_checkpoint_messages(session_id)
+        if not checkpoint_msgs or not self._compactor.should_compact(checkpoint_msgs):
+            return
+
+        token_estimate = self._compactor.get_token_estimate(checkpoint_msgs)
+        logger.info(
+            "Compaction triggered for session %s (%d messages, ~%d tokens)",
+            session_id, len(checkpoint_msgs), token_estimate,
+        )
+
+        event_queue: asyncio.Queue = asyncio.Queue()
+
+        async def on_event(event: dict) -> None:
+            event["session_id"] = session_id
+            await event_queue.put(event)
+
+        compaction_task = asyncio.create_task(
+            self._compactor.compact(session_id, checkpoint_msgs, on_event=on_event)
+        )
+
+        # Drain events as they arrive until compaction finishes
+        while True:
+            queue_get = asyncio.create_task(event_queue.get())
+            done, _ = await asyncio.wait(
+                {queue_get, compaction_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if queue_get in done:
+                yield queue_get.result()
+            else:
+                queue_get.cancel()
+            if compaction_task.done():
+                # Drain any remaining events
+                while not event_queue.empty():
+                    yield event_queue.get_nowait()
+                break
+
+        try:
+            compacted_messages = compaction_task.result()
+        except Exception as e:
+            logger.warning("Compaction task failed: %s", e)
+            return
+
+        await self._write_compacted_checkpoint(session_id, compacted_messages)
+
+    async def _write_compacted_checkpoint(
+        self, session_id: str, compacted_messages: list
+    ) -> None:
+        """Write compacted messages back to the checkpoint store."""
+        try:
+            config = {"configurable": {"thread_id": session_id}}
+            current_state = await self._checkpointer.aget(config)
+            if current_state:
+                current_state["channel_values"]["messages"] = compacted_messages
+                await self._checkpointer.aput(
+                    config,
+                    current_state["channel_values"],
+                    {"source": "compaction", "step": current_state.get("metadata", {}).get("step", 0) + 1},
+                    {},
+                )
+        except Exception as e:
+            logger.warning("Failed to update checkpoint after compaction: %s", e)
+
     async def invoke(self, message: str, session_id: str) -> dict[str, Any]:
         """Process a user message (synchronous)."""
         self._ensure_session_dir(session_id)
@@ -425,18 +595,29 @@ class DeepAgentsRuntime:
         try:
             agent = self._get_or_create_agent(session_id)
             if agent is not None:
+                # Context compaction check
+                await self._apply_compaction(session_id, agent)
+
+                # Active Memory pre-hook: inject relevant memories
+                messages = []
+                memory_context = await self._recall_memory(message)
+                if memory_context:
+                    messages.append(("system", memory_context))
+                messages.append(("user", message))
+
                 result = await agent.ainvoke(
-                    {"messages": [
-                        ("user", message),
-                    ]},
+                    {"messages": messages},
                     config={
                         "configurable": {"thread_id": session_id},
                         "recursion_limit": self.config.recursion_limit,
                     },
                 )
                 ai_message = result["messages"][-1]
+                content = ai_message.content
+                if content:
+                    content = self._model_normalizer.normalize_complete(content)
                 return {
-                    "content": ai_message.content,
+                    "content": content,
                     "session_id": session_id,
                     "tool_calls": [
                         {"name": tc["name"], "args": tc.get("args", {})}
@@ -463,6 +644,10 @@ class DeepAgentsRuntime:
           - {"type": "tool_result", "tool_name": "...", "content": "..."}  (full_history mode only)
           - {"type": "file", "path": "...", "file_type": "...", "name": "..."}  (both modes)
           - {"type": "thinking"}  (keepalive during LLM reasoning)
+          - {"type": "compaction_start", "before_tokens": int, "message_count": int}
+          - {"type": "compaction_memory_flush", "stored": int}
+          - {"type": "compaction_complete", "before_tokens": int, "after_tokens": int,
+             "message_count": int, "memories_flushed": int}
           - {"type": "error", "error": "..."}
         """
         self._ensure_session_dir(session_id)
@@ -471,10 +656,19 @@ class DeepAgentsRuntime:
         try:
             agent = self._get_or_create_agent(session_id)
             if agent is not None:
+                # Context compaction check — stream progress events
+                async for compaction_event in self._apply_compaction_stream(session_id, agent):
+                    yield compaction_event
+
+                # Active Memory pre-hook: inject relevant memories
+                messages = []
+                memory_context = await self._recall_memory(message)
+                if memory_context:
+                    messages.append(("system", memory_context))
+                messages.append(("user", message))
+
                 async for event in agent.astream_events(
-                    {"messages": [
-                        ("user", message),
-                    ]},
+                    {"messages": messages},
                     config={
                         "configurable": {"thread_id": session_id},
                         "recursion_limit": self.config.recursion_limit,
@@ -491,10 +685,12 @@ class DeepAgentsRuntime:
                     if kind == "on_chat_model_stream":
                         chunk = event.get("data", {}).get("chunk", None)
                         if chunk:
-                            content = getattr(chunk, "content", "")
-                            if content and not is_sub_agent:
-                                yield {"type": "content", "content": content}
-                            elif not content and not is_sub_agent:
+                            raw_content = getattr(chunk, "content", "")
+                            if raw_content and not is_sub_agent:
+                                content = self._model_normalizer.normalize(raw_content)
+                                if content:
+                                    yield {"type": "content", "content": content}
+                            elif not raw_content and not is_sub_agent:
                                 yield {"type": "thinking"}
 
                     # Tool start — emit tool_call events (full_history mode only)
@@ -573,7 +769,15 @@ class DeepAgentsRuntime:
             except Exception:
                 logger.exception("Failed to close PostgreSQL connection")
 
-        # 4. Close backend
+        # 4. Close memory service
+        if self._memory_service:
+            try:
+                await self._memory_service.close()
+                logger.info("Memory service closed")
+            except Exception:
+                logger.exception("Failed to close memory service")
+
+        # 5. Close backend
         if self.backend:
             await self.backend.close()
 

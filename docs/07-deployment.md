@@ -31,9 +31,9 @@ bash poc/k8s/deploy.sh
 此腳本會自動：
 1. 建立 kind 叢集（含 NodePort mapping，Gateway 對外 :8000）
 2. 部署 Namespace + RBAC
-3. 構建三個 Docker 鏡像（Agent、Orchestrator、Gateway）
+3. 構建五個 Docker 鏡像（Agent、Orchestrator、Gateway、Admin、Storage Service）
 4. 載入鏡像到 kind 叢集
-5. 部署 Orchestrator（Deployment + ClusterIP Service）
+5. 部署 Orchestrator、Admin、Storage Service（Deployment + ClusterIP Service）
 6. 部署 Gateway（Deployment + NodePort Service）
 
 ### 0.3 驗證
@@ -44,7 +44,7 @@ curl -s http://localhost:8000/health
 
 # 建立工作區
 curl -s -X POST http://localhost:8000/api/v1/workspaces/ensure \
-  -H "Authorization: Bearer $POC_STATIC_TOKEN:testuser1" \
+  -H "Authorization: Bearer poc-test-token-12345:testuser1" \
   -H "Content-Type: application/json" \
   -d '{"session_id": "sess-001"}'
 

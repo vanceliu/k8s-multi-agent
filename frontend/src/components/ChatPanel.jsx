@@ -174,9 +174,11 @@ function apiMessagesToChat(apiMessages, { baseUrl, workspaceId } = {}) {
         role: 'system',
         content: `📎 ${msg.tool_name}: ${msg.content}`,
       });
-      // Render files attached to tool results (images inline, documents as links)
+      // Render non-image files attached to tool results as download links
+      // Images are already rendered inline via markdown img tags in assistant content
       if (msg.files && msg.files.length > 0 && baseUrl && workspaceId) {
         for (const f of msg.files) {
+          if (f.type === 'image') continue;
           const downloadUrl = `${baseUrl}/api/v1/workspaces/${workspaceId}/storage/files/download?path=${encodeURIComponent(f.path)}`;
           result.push({
             role: 'file',
@@ -403,6 +405,8 @@ export default function ChatPanel() {
               },
               onThinking: () => { setThinking(true); },
               onFile: (fileData) => {
+                // Images are already rendered inline via markdown img tags in content — skip duplicate
+                if (fileData.type === 'image') return;
                 const downloadUrl = `${baseUrl}/api/v1/workspaces/${workspaceIdRef.current}/storage/files/download?path=${encodeURIComponent(fileData.path)}`;
                 setMessages((prev) => [...prev, {
                   role: 'file',

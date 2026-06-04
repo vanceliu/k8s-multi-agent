@@ -1,7 +1,6 @@
 """Kubernetes client wrapper — creates/deletes Pod, Service per workspace."""
 
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -50,10 +49,19 @@ class K8sClient:
     def __init__(self):
         try:
             config.load_incluster_config()
+            # Workaround for kubernetes v36 bug: auth_settings() returns empty dict,
+            # so Authorization header is not sent. Manually inject it.
+            c = client.Configuration.get_default_copy()
+            api_client = client.ApiClient(c)
+            token = c.api_key.get("authorization", "")
+            if token:
+                api_client.default_headers["Authorization"] = token
+            self.core = client.CoreV1Api(api_client=api_client)
+            self.batch = client.BatchV1Api(api_client=api_client)
         except config.ConfigException:
             config.load_kube_config()
-        self.core = client.CoreV1Api()
-        self.batch = client.BatchV1Api()
+            self.core = client.CoreV1Api()
+            self.batch = client.BatchV1Api()
         self.ns = K8S_NAMESPACE
 
     # ── Pod ───────────────────────────────────────────────────────────
@@ -213,7 +221,7 @@ class K8sClient:
                             client.V1EnvVar(name="CWA_API_KEY", value=CWA_API_KEY),
                             client.V1EnvVar(
                                 name="AGENT_DATABASE_URL",
-                                value=os.getenv("DATABASE_URL", "").replace("+asyncpg", ""),
+                                value="postgresql://postgres:postgres@host.docker.internal:5432/claw_data",
                             ),
                             client.V1EnvVar(
                                 name="POD_NAME",

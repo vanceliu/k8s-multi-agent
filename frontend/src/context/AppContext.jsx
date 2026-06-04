@@ -11,7 +11,7 @@ const RECOVER_POLL_INTERVAL = 2000;
 
 export function AppProvider({ children }) {
   const [baseUrl, setBaseUrl] = useState('http://localhost:8000');
-  const [token, setToken] = useState('');
+  const [token, setToken] = useState('poc-test-token-12345:testuser1');
   const [workspaceId, setWorkspaceId] = useState('');
   const [sessionId, setSessionId] = useState(() => `sess-${crypto.randomUUID().slice(0, 8)}`);
   const [connected, setConnected] = useState(false);
@@ -34,7 +34,7 @@ export function AppProvider({ children }) {
   }, []);
 
   // Admin Service state (shares Gateway baseUrl, only needs separate token)
-  const [adminToken, setAdminToken] = useState('');
+  const [adminToken, setAdminToken] = useState('poc-admin-token-12345');
   const [adminConnected, setAdminConnected] = useState(false);
   const isAdmin = adminConnected;
 

@@ -2,7 +2,7 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir fastapi uvicorn sqlalchemy asyncpg greenlet kubernetes httpx \
+RUN pip install --no-cache-dir fastapi uvicorn sqlalchemy asyncpg greenlet kubernetes httpx pyyaml \
     langgraph-checkpoint-postgres "psycopg[binary]>=3.2.0"
 
 COPY poc/ /app/poc/

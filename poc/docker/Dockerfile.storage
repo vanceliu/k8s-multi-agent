@@ -2,7 +2,7 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir fastapi uvicorn sqlalchemy asyncpg greenlet kubernetes httpx python-multipart
+RUN pip install --no-cache-dir fastapi uvicorn sqlalchemy asyncpg greenlet kubernetes httpx python-multipart pyyaml
 
 COPY poc/ /app/poc/
 

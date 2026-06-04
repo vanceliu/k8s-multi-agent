@@ -1,4 +1,4 @@
-"""SQLAlchemy ORM models — 5 tables (workspace-centric) per design doc 03."""
+"""SQLAlchemy ORM models — workspace-centric tables per design doc 03 + user bindings (doc 13)."""
 
 from datetime import datetime, timezone
 
@@ -135,7 +135,6 @@ class PodState(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     pod_name = Column(String(255), unique=True, nullable=False)
-    user_id = Column(String(255), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False, index=True)
     workspace_id = Column(String(255), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"))
     desired_state = Column(String(50), nullable=False)
     desired_resources_cpu = Column(String(20))
@@ -145,3 +144,51 @@ class PodState(Base):
     last_error_message = Column(Text)
     last_state_update_at = Column(DateTime(timezone=True))
     sync_status = Column(String(50), default="synced", index=True)
+
+
+class UserBinding(Base):
+    """多平台身份綁定：LINE/Slack/Teams 帳號對應到系統 user。"""
+    __tablename__ = "user_bindings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(
+        String(255),
+        ForeignKey("users.user_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    platform = Column(String(50), nullable=False)  # 'line' / 'slack' / 'teams'
+    platform_uid = Column(String(255), nullable=False)
+    display_name = Column(String(255))
+    status = Column(String(20), nullable=False, default="active")  # 'active' / 'inactive'
+    metadata_ = Column("metadata", JSON)
+    bound_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    user = relationship("User")
+
+    __table_args__ = (
+        UniqueConstraint("platform", "platform_uid", name="uq_platform_uid"),
+        UniqueConstraint("user_id", "platform", name="uq_user_platform"),
+    )
+
+
+class BindingVerification(Base):
+    """綁定驗證碼暫存，用於 IM 平台身份驗證。"""
+    __tablename__ = "binding_verifications"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(
+        String(255),
+        ForeignKey("users.user_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    platform = Column(String(50), nullable=False)
+    code = Column(String(10), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+    __table_args__ = (
+        # 加速查詢：platform + code + used + expires_at
+    )

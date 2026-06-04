@@ -22,7 +22,8 @@ from poc.gateway.channels.service import (
     start_channel_service,
     stop_channel_service,
 )
-from poc.utils.config import ADMIN_STATIC_TOKEN, ORCHESTRATOR_HOST, STORAGE_SERVICE_HOST, STATIC_TOKEN
+from poc.db.session import init_db
+from poc.utils.config import ADMIN_STATIC_TOKEN, ORCHESTRATOR_HOST, STORAGE_SERVICE_HOST, STATIC_TOKEN, LINE_CHANNEL_SECRET, LINE_CHANNEL_ACCESS_TOKEN
 
 # Admin Service internal URL (ClusterIP)
 ADMIN_SERVICE_HOST = os.environ.get(
@@ -41,10 +42,22 @@ security = HTTPBearer()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Start channel service (MessageBus + ChannelManager + WebChannel)
+    # Initialize DB tables (idempotent — safe if Orchestrator already created them)
+    await init_db()
+
+    # Build channels config
+    channels_config = {"web": {"enabled": True}}
+    if LINE_CHANNEL_SECRET and LINE_CHANNEL_ACCESS_TOKEN:
+        channels_config["line"] = {
+            "enabled": True,
+            "channel_secret": LINE_CHANNEL_SECRET,
+            "channel_access_token": LINE_CHANNEL_ACCESS_TOKEN,
+        }
+
+    # Start channel service (MessageBus + ChannelManager + adapters)
     svc = await start_channel_service(
         orchestrator_url=ORCHESTRATOR_HOST,
-        channels_config={"web": {"enabled": True}},
+        channels_config=channels_config,
     )
     logger.info("API Gateway started, orchestrator=%s, channels=%s", ORCHESTRATOR_HOST, svc.get_status())
     yield
@@ -54,7 +67,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="API Gateway POC",
     lifespan=lifespan,
-    description="Token format: `$POC_STATIC_TOKEN:{user_id}`",
+    description="Token format: `poc-test-token-12345:{user_id}` (e.g. `poc-test-token-12345:testuser1`)",
 )
 
 app.add_middleware(
@@ -66,6 +79,7 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:8080",
+        "https://openclaw-lineliff.darfonenergy-platform.com"
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -763,6 +777,162 @@ async def proxy_to_agent(
         status_code=resp.status_code,
         media_type=resp.headers.get("content-type"),
     )
+
+
+# ── LINE webhook ─────────────────────────────────────────────────────
+
+@app.post("/api/v1/channels/line/webhook")
+async def line_webhook(request: Request):
+    """LINE Messaging API webhook endpoint. No auth required (signature verified internally)."""
+    svc = get_channel_service()
+    if not svc:
+        raise HTTPException(status_code=503, detail="Channel service not initialized")
+
+    line_channel = svc.get_channel("line")
+    if not line_channel:
+        raise HTTPException(status_code=503, detail="LINE channel not available")
+
+    from poc.gateway.channels.adapters.line import LINEChannel
+    assert isinstance(line_channel, LINEChannel)
+
+    body = await request.body()
+    signature = request.headers.get("X-Line-Signature", "")
+
+    try:
+        await line_channel.handle_webhook(body, signature)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return {"status": "ok"}
+
+
+# ── User Bindings API ────────────────────────────────────────────────
+
+class BindingInitRequest(BaseModel):
+    platform: str  # 'line' / 'slack' / 'teams'
+
+
+@app.post("/api/v1/users/bindings/init")
+async def init_binding(
+    req: BindingInitRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+):
+    """Initiate binding flow — generate verification code."""
+    user_id = _validate_token(credentials)
+
+    supported_platforms = {"line", "slack", "teams"}
+    if req.platform not in supported_platforms:
+        raise HTTPException(status_code=400, detail=f"Unsupported platform: {req.platform}")
+
+    from poc.gateway.channels.adapters._line_binding import create_verification
+    result = await create_verification(user_id=user_id, platform=req.platform)
+
+    if "error" in result:
+        if result["error"] == "already_bound":
+            raise HTTPException(status_code=409, detail=result["message"])
+        raise HTTPException(status_code=400, detail=result.get("message", result["error"]))
+
+    return {
+        "platform": req.platform,
+        "code": result["code"],
+        "expires_in": result["expires_in"],
+        "instruction": f"請在 {req.platform.upper()} 官方帳號中輸入此驗證碼完成綁定",
+    }
+
+
+@app.get("/api/v1/users/bindings")
+async def list_bindings(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+):
+    """List all platform bindings for the authenticated user."""
+    user_id = _validate_token(credentials)
+
+    from poc.gateway.channels.adapters._line_binding import list_user_bindings
+    bindings = await list_user_bindings(user_id=user_id)
+
+    return {"bindings": bindings}
+
+
+@app.delete("/api/v1/users/bindings/{platform}")
+async def delete_binding(
+    platform: str,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+):
+    """Remove platform binding (Web-initiated unbind)."""
+    user_id = _validate_token(credentials)
+
+    from poc.gateway.channels.adapters._line_binding import unbind_by_user
+    removed = await unbind_by_user(user_id=user_id, platform=platform)
+
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"No binding found for platform: {platform}")
+
+    return {"status": "unbound", "platform": platform}
+
+
+# ── LIFF Binding API ─────────────────────────────────────────────────
+
+class LiffBindRequest(BaseModel):
+    username: str
+    password: str
+    line_user_id: str
+    line_display_name: str = ""
+
+
+@app.post("/api/v1/liff/bindaccount")
+async def liff_bind_account(req: LiffBindRequest):
+    """LIFF binding API — verify credentials + create binding.
+
+    No Bearer token required (LIFF page cannot carry Gateway token).
+    Authentication is done via username + password in the request body.
+    POC: password must match STATIC_TOKEN.
+    """
+    from sqlalchemy import select, and_
+    from poc.db.models import User, UserBinding
+    from poc.db.session import async_session
+    from poc.gateway.channels.adapters._line_binding import verify_and_bind_direct
+
+    # POC: verify password == STATIC_TOKEN
+    if req.password != STATIC_TOKEN:
+        raise HTTPException(status_code=401, detail={"success": False, "error": "帳號或密碼錯誤"})
+
+    # Look up user by username or user_id
+    async with async_session() as session:
+        result = await session.execute(
+            select(User).where(
+                (User.username == req.username) | (User.user_id == req.username)
+            )
+        )
+        user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(status_code=401, detail={"success": False, "error": "帳號或密碼錯誤"})
+
+    # Create binding
+    bind_result = await verify_and_bind_direct(
+        user_id=user.user_id,
+        platform="line",
+        platform_uid=req.line_user_id,
+        display_name=req.line_display_name,
+    )
+
+    if not bind_result.get("success"):
+        status_code = 409 if "已綁定" in bind_result.get("error", "") else 400
+        raise HTTPException(status_code=status_code, detail=bind_result)
+
+    # Push confirmation message to LINE
+    svc = get_channel_service()
+    if svc:
+        line_channel = svc.get_channel("line")
+        if line_channel:
+            from poc.gateway.channels.adapters.line import LINEChannel
+            if isinstance(line_channel, LINEChannel):
+                await line_channel._push_message(
+                    req.line_user_id,
+                    f"綁定成功！已連結帳號 {user.username}，現在可以直接對話了。",
+                )
+
+    return {"success": True, "username": user.username, "platform": "line", "message": "綁定成功"}
 
 
 # ── Admin ─────────────────────────────────────────────────────────────

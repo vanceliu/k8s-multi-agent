@@ -29,7 +29,7 @@ spec:
           protocol: TCP
         env:
         - name: DATABASE_URL
-          value: ""  # Set via K8s Secret in production
+          value: "postgresql+asyncpg://postgres:postgres@host.docker.internal:5432/claw_data"
         - name: K8S_NAMESPACE
           value: "agent-platform"
         - name: AGENT_IMAGE
@@ -45,7 +45,7 @@ spec:
         - name: STORAGE_SERVICE_HOST
           value: "http://storage-service.agent-platform.svc.cluster.local"
         - name: POC_ADMIN_TOKEN
-          value: ""  # Set via K8s Secret in production
+          value: "poc-admin-token-12345"
         - name: POD_CPU_REQUEST
           value: "100m"
         - name: POD_CPU_LIMIT

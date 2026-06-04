@@ -876,4 +876,4 @@ async def reconcile_orphans(self, db: AsyncSession):
 └─────────────────────────────────────────────────────────────┘
 ```
 
-> **POC 不實作併發控制**（單副本 + SQLite 無此問題）。Phase 1 Production Orchestrator 實作時加入。
+> **POC 不實作併發控制**（單副本，無多 replica 競爭問題）。Phase 1 Production Orchestrator 實作時加入。

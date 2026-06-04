@@ -1174,6 +1174,52 @@ Agent 與 Orchestrator **共用同一個 PostgreSQL**，但使用不同用途：
 
 > **注意**：原設計中的 `pvc_states` 表已不需要（S3 無對等概念），Phase 1 可移除此表。
 
+### 7.4 Context Compaction（對話壓縮）
+
+長對話會超出 LLM context window 上限，Context Compaction 機制在接近上限前自動壓縮歷史：
+
+```
+每次 invoke 前
+       │
+       ▼
+  TokenCounter 估算 checkpoint messages 總 token
+       │
+       ▼ 超過 context window × 75%？
+       │
+  No ──┤──→ 正常執行
+       │
+  Yes ─┤
+       ▼
+  ┌─────────────────────────────────────────────┐
+  │  Phase 1: Silent Memory Flush（並行）        │
+  │  LLM 提取重要資訊 → MemoryService.save()    │
+  ├─────────────────────────────────────────────┤
+  │  Phase 2: Summarize（並行）                  │
+  │  LLM 將舊訊息壓縮為條列式摘要               │
+  └─────────────────────────────────────────────┘
+       │
+       ▼
+  重建 messages = [SystemMessage(摘要)] + 最近 6 輪完整對話
+       │
+       ▼
+  更新 checkpoint state → 正常執行
+```
+
+**配置參數（env vars）：**
+
+| 環境變數 | 預設值 | 說明 |
+|----------|--------|------|
+| `COMPACTION_ENABLED` | `true` | 啟用自動壓縮 |
+| `COMPACTION_THRESHOLD_RATIO` | `0.75` | 觸發壓縮的 token 比例 |
+| `COMPACTION_TARGET_RATIO` | `0.40` | 壓縮後目標 token 比例 |
+| `COMPACTION_PRESERVE_TURNS` | `6` | 保留最近幾輪完整對話 |
+| `COMPACTION_MIN_MESSAGES` | `20` | 最少訊息數才觸發 |
+| `COMPACTION_MEMORY_FLUSH` | `true` | 壓縮前是否執行記憶沖刷 |
+
+**SSE 事件：** 壓縮完成後 yield `{"type": "compaction_complete", "before_tokens": N, "after_tokens": M}`
+
+> 詳見 [12-context-compaction.md](./12-context-compaction.md)
+
 ---
 
 ## 8. 與 Orchestrator / Gateway 的介面變更

@@ -44,6 +44,9 @@ class AgentConfig:
     openai_api_base: str = field(
         default_factory=lambda: os.getenv("OPENAI_API_BASE", "http://localhost:1234/v1")
     )
+    openai_api_key: str = field(
+        default_factory=lambda: os.getenv("OPENAI_API_KEY", "")
+    )
 
     # LLM model (sub-agents: research_agent, code_agent)
     # Falls back to supervisor settings when not explicitly set.
@@ -71,12 +74,18 @@ class AgentConfig:
             os.getenv("OPENAI_API_BASE", "http://localhost:1234/v1"),
         )
     )
+    sub_agent_api_key: str = field(
+        default_factory=lambda: os.getenv(
+            "SUB_AGENT_API_KEY",
+            os.getenv("OPENAI_API_KEY", ""),
+        )
+    )
 
     # Database (shared PostgreSQL with Orchestrator, for checkpointer)
     database_url: str = field(
         default_factory=lambda: os.getenv(
             "AGENT_DATABASE_URL",
-            "postgresql://postgres:changeme@host.docker.internal:5432/claw_data",
+            "postgresql://postgres:postgres@host.docker.internal:5432/claw_data",
         )
     )
 
@@ -107,4 +116,24 @@ class AgentConfig:
     # Shared workspaces mount base path
     shared_base_path: str = field(
         default_factory=lambda: os.getenv("SHARED_BASE_PATH", "/shared")
+    )
+
+    # Context Compaction
+    compaction_enabled: bool = field(
+        default_factory=lambda: os.getenv("COMPACTION_ENABLED", "true").lower() in ("true", "1", "yes")
+    )
+    compaction_threshold_ratio: float = field(
+        default_factory=lambda: float(os.getenv("COMPACTION_THRESHOLD_RATIO", "0.75"))
+    )
+    compaction_target_ratio: float = field(
+        default_factory=lambda: float(os.getenv("COMPACTION_TARGET_RATIO", "0.40"))
+    )
+    compaction_preserve_turns: int = field(
+        default_factory=lambda: int(os.getenv("COMPACTION_PRESERVE_TURNS", "6"))
+    )
+    compaction_min_messages: int = field(
+        default_factory=lambda: int(os.getenv("COMPACTION_MIN_MESSAGES", "20"))
+    )
+    compaction_memory_flush: bool = field(
+        default_factory=lambda: os.getenv("COMPACTION_MEMORY_FLUSH", "true").lower() in ("true", "1", "yes")
     )

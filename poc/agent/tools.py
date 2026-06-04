@@ -1,4 +1,4 @@
-"""Custom tools for Deep Agent — sandboxed shell + python REPL + orchestrator notification.
+"""Custom tools for Deep Agent — sandboxed shell + python REPL + orchestrator notification + memory.
 
 All tools are sandboxed to workspace_path:
   - Shell: cwd forced to session directory, escape patterns rejected
@@ -6,8 +6,8 @@ All tools are sandboxed to workspace_path:
   - Session isolation: cwd = sessions/{session_id}/ (hard), workspace boundary enforced
 
 Tools are split into groups for supervisor sub-agents:
-  - research_tools: duckduckgo_search (rate-limited)
-  - code_tools: terminal + python_repl
+  - research_tools: duckduckgo_search, memory_search
+  - code_tools: terminal + python_repl + memory_save/update/delete
   - common_tools: notify_orchestrator_activity
 """
 
@@ -16,10 +16,13 @@ import logging
 import os
 import re
 import subprocess
-from typing import Annotated
+from typing import Annotated, Optional, TYPE_CHECKING
 
 import httpx
 from langchain_core.tools import BaseTool, tool
+
+if TYPE_CHECKING:
+    from poc.agent.memory_service import MemoryService
 
 logger = logging.getLogger(__name__)
 
@@ -501,8 +504,172 @@ class LoggingSearchTool(BaseTool):
         return self._run(query)
 
 
-def get_research_tools() -> list:
-    """Tools for research sub-agent: web search + Taiwan weather."""
+# ── Memory Tools ──────────────────────────────────────────────────
+
+
+class MemorySearchTool(BaseTool):
+    """Search workspace memories using FTS5 full-text search."""
+
+    name: str = "memory_search"
+    description: str = (
+        "搜尋工作區的長期記憶。輸入關鍵字或問題，回傳相關記憶摘要。\n"
+        "可選擇性指定記憶類型篩選：user/feedback/project/reference\n"
+        "輸入格式：'<搜尋關鍵字>' 或 '<類型>:<搜尋關鍵字>'\n"
+        "範例：'部署架構' 或 'project:截止日期'"
+    )
+    memory_service: object = None  # MemoryService instance
+
+    def _parse_query_input(self, query: str) -> tuple[str, Optional[str]]:
+        """Parse 'type:query' format."""
+        valid_types = {"user", "feedback", "project", "reference"}
+        if ":" in query:
+            prefix, _, rest = query.partition(":")
+            if prefix.strip().lower() in valid_types:
+                return rest.strip(), prefix.strip().lower()
+        return query.strip(), None
+
+    def _run(self, query: str) -> str:
+        import asyncio
+        return asyncio.get_event_loop().run_until_complete(self._arun(query))
+
+    async def _arun(self, query: str) -> str:
+        if not self.memory_service:
+            return "記憶服務未初始化。"
+        search_query, type_filter = self._parse_query_input(query)
+        if not search_query:
+            return "請提供搜尋關鍵字。"
+        results = await self.memory_service.search(search_query, type_filter=type_filter, limit=5)
+        if not results:
+            return "未找到相關記憶。"
+        lines = []
+        for i, entry in enumerate(results, 1):
+            tags_str = f" [{', '.join(entry.tags)}]" if entry.tags else ""
+            lines.append(f"{i}. **{entry.name}** ({entry.type}){tags_str}")
+            lines.append(f"   {entry.summary}")
+            for content_line in entry.content.split("\n"):
+                stripped = content_line.strip()
+                if stripped.startswith("**Why:") or stripped.startswith("**How to apply:"):
+                    lines.append(f"   {stripped}")
+            lines.append("")
+        return "\n".join(lines)
+
+
+class MemorySaveTool(BaseTool):
+    """Save a new memory to workspace."""
+
+    name: str = "memory_save"
+    description: str = (
+        "儲存新的長期記憶到工作區。記憶會跨 session 保留。\n"
+        "輸入 JSON 格式：\n"
+        '{"name": "記憶名稱", "type": "user|feedback|project|reference", '
+        '"tags": ["標籤1", "標籤2"], "content": "記憶內容", '
+        '"why": "為什麼重要", "how": "未來如何應用"}\n'
+        "type 說明：\n"
+        "  user — 使用者角色、偏好、知識背景\n"
+        "  feedback — 對 AI 行為的修正或肯定\n"
+        "  project — 專案進度、決策、時程\n"
+        "  reference — 外部資源位置"
+    )
+    memory_service: object = None
+
+    def _run(self, input_str: str) -> str:
+        import asyncio
+        return asyncio.get_event_loop().run_until_complete(self._arun(input_str))
+
+    async def _arun(self, input_str: str) -> str:
+        if not self.memory_service:
+            return "記憶服務未初始化。"
+        import json
+        try:
+            data = json.loads(input_str)
+        except json.JSONDecodeError:
+            return "輸入格式錯誤，請使用 JSON 格式。"
+
+        name = data.get("name", "").strip()
+        mem_type = data.get("type", "reference").strip()
+        tags = data.get("tags", [])
+        content = data.get("content", "").strip()
+        why = data.get("why", "").strip()
+        how = data.get("how", "").strip()
+
+        if not name or not content:
+            return "name 和 content 為必填欄位。"
+        if mem_type not in ("user", "feedback", "project", "reference"):
+            return f"type 必須是 user/feedback/project/reference，收到：{mem_type}"
+
+        file_path = await self.memory_service.store(name, mem_type, tags, content, why, how)
+        return f"記憶已儲存：{file_path}"
+
+
+class MemoryUpdateTool(BaseTool):
+    """Update an existing memory."""
+
+    name: str = "memory_update"
+    description: str = (
+        "更新既有記憶的內容或標籤。\n"
+        "輸入 JSON 格式：\n"
+        '{"file_path": "記憶檔名.md", "content": "新內容（可選）", "tags": ["新標籤"]（可選）}\n'
+        "至少需提供 content 或 tags 其中之一。\n"
+        "使用 memory_search 先找到要更新的記憶檔名。"
+    )
+    memory_service: object = None
+
+    def _run(self, input_str: str) -> str:
+        import asyncio
+        return asyncio.get_event_loop().run_until_complete(self._arun(input_str))
+
+    async def _arun(self, input_str: str) -> str:
+        if not self.memory_service:
+            return "記憶服務未初始化。"
+        import json
+        try:
+            data = json.loads(input_str)
+        except json.JSONDecodeError:
+            return "輸入格式錯誤，請使用 JSON 格式。"
+
+        file_path = data.get("file_path", "").strip()
+        content = data.get("content")
+        tags = data.get("tags")
+
+        if not file_path:
+            return "file_path 為必填欄位。"
+        if content is None and tags is None:
+            return "至少需提供 content 或 tags 其中之一。"
+
+        try:
+            await self.memory_service.update(file_path, content=content, tags=tags)
+            return f"記憶已更新：{file_path}"
+        except FileNotFoundError:
+            return f"找不到記憶檔案：{file_path}。請用 memory_search 確認檔名。"
+
+
+class MemoryDeleteTool(BaseTool):
+    """Delete a memory from workspace."""
+
+    name: str = "memory_delete"
+    description: str = (
+        "刪除工作區的記憶。\n"
+        "輸入記憶檔名（如 'user_preferences.md'）。\n"
+        "使用 memory_search 先找到要刪除的記憶檔名。"
+    )
+    memory_service: object = None
+
+    def _run(self, file_path: str) -> str:
+        import asyncio
+        return asyncio.get_event_loop().run_until_complete(self._arun(file_path))
+
+    async def _arun(self, file_path: str) -> str:
+        if not self.memory_service:
+            return "記憶服務未初始化。"
+        file_path = file_path.strip()
+        if not file_path:
+            return "請提供記憶檔名。"
+        await self.memory_service.delete(file_path)
+        return f"記憶已刪除：{file_path}"
+
+
+def get_research_tools(memory_service=None) -> list:
+    """Tools for research sub-agent: web search + Taiwan weather + memory search."""
     tools = []
 
     # DuckDuckGo search
@@ -522,11 +689,16 @@ def get_research_tools() -> list:
     else:
         logger.warning("CWA_API_KEY not set, CWAWeatherTool disabled")
 
+    # Memory search
+    if memory_service:
+        tools.append(MemorySearchTool(memory_service=memory_service))
+        logger.info("MemorySearchTool loaded")
+
     return tools
 
 
-def get_code_tools(workspace_path: str, session_id: str | None = None) -> list:
-    """Tools for code sub-agent: shell + python REPL."""
+def get_code_tools(workspace_path: str, session_id: str | None = None, memory_service=None) -> list:
+    """Tools for code sub-agent: shell + python REPL + memory write."""
     tools = []
     cwd = _session_cwd(workspace_path, session_id)
 
@@ -556,6 +728,13 @@ def get_code_tools(workspace_path: str, session_id: str | None = None) -> list:
         )
         tools.append(python_tool)
         logger.info("SandboxedPythonREPLTool loaded (cwd=%s)", cwd)
+
+    # Memory write tools
+    if memory_service:
+        tools.append(MemorySaveTool(memory_service=memory_service))
+        tools.append(MemoryUpdateTool(memory_service=memory_service))
+        tools.append(MemoryDeleteTool(memory_service=memory_service))
+        logger.info("Memory write tools loaded (save/update/delete)")
 
     return tools
 

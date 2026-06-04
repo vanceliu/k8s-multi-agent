@@ -1,0 +1,92 @@
+# POC Configuration
+# Environment variables override these values (env vars take priority).
+
+auth:
+  static_token: "poc-test-token-12345"
+  admin_static_token: "poc-admin-token-12345"
+
+db:
+  database_url: "postgresql+asyncpg://postgres:postgres@localhost:5432/claw_data"
+
+k8s:
+  namespace: "agent-platform"
+  agent_image: "localhost/k8s-agent-runtime:latest"
+  agent_port: 8080
+
+services:
+  orchestrator_host: "http://localhost:8080"
+  admin_host: "http://localhost:8090"
+  storage_service_host: "http://localhost:8091"
+
+storage:
+  pvc_file_size_limit_mb: 10
+  default_pvc_size_gb: 1
+  default_pvc_storage_class: "standard"
+
+lifecycle:
+  idle_timeout_minutes: 10
+  reap_check_interval_seconds: 30
+
+pod:
+  cpu_request: "100m"
+  cpu_limit: "500m"
+  memory_request: "256Mi"
+  memory_limit: "1Gi"
+  restart_policy: "OnFailure"
+  termination_grace_period_seconds: 30
+
+probes:
+  liveness:
+    initial_delay: 30
+    period: 10
+    timeout: 5
+    failure_threshold: 3
+  readiness:
+    initial_delay: 10
+    period: 5
+    timeout: 3
+    failure_threshold: 3
+
+cleanup_job:
+  image: "busybox:latest"
+  ttl_seconds: 60
+
+cwa:
+  api_base: "https://opendata.cwa.gov.tw/api/v1/rest/datastore"
+  api_key: ""
+
+agent:
+  debug: false
+  display_mode: "full_history"  # options: "normal", "full_history"
+  supervisor:
+    model: "glm-5.1"
+    model_provider: "openai"
+    api_base: "https://api.z.ai/api/coding/paas/v4"
+    api_key: ""
+#    model: "MiniMax-M2.7"
+#    model_provider: "openai"
+#    api_base: "https://api.minimax.io/v1"
+#    api_key: ""
+  sub_agent:
+    model: "glm-5-turbo"
+    # When not set, falls back to supervisor settings.
+    model_provider: "openai"
+    api_base: "https://api.z.ai/api/coding/paas/v4"
+    api_key: ""
+#    model: "MiniMax-M2.7"
+#    model_provider: "openai"
+#    api_base: "https://api.minimax.io/v1"
+#    api_key: ""
+
+  compaction:
+    enabled: true
+    threshold_ratio: 0.75
+    target_ratio: 0.40
+    preserve_recent_turns: 6
+    min_messages: 20
+    memory_flush: true
+
+im_channel:
+  line:
+    LINE_CHANNEL_SECRET: ""
+    CHANNEL_ACCESS_TOKEN: ""

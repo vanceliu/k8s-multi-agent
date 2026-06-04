@@ -55,12 +55,14 @@ def create_supervisor_workflow(
     workspace_id: str,
     session_id: str,
     checkpointer: Any = None,
+    post_model_hook: Any = None,
 ) -> Any:
     """Create the full supervisor + sub-agent workflow and compile it.
 
     Args:
         model: LLM for the supervisor (high-capability model).
         sub_model: LLM for sub-agents (lightweight, fast model).
+        post_model_hook: Optional hook to clean LLM output before checkpoint storage.
 
     Returns a compiled LangGraph application ready for invoke/astream.
     """
@@ -72,13 +74,17 @@ def create_supervisor_workflow(
     research_agent = create_research_agent(sub_model, research_tools)
     code_agent = create_code_agent(sub_model, code_tools + common_tools, session_id)
 
-    workflow = create_supervisor(
+    supervisor_kwargs = dict(
         agents=[research_agent, code_agent],
         model=model,
         prompt=supervisor_prompt,
         output_mode="full_history",
         add_handoff_messages=True,
     )
+    if post_model_hook is not None:
+        supervisor_kwargs["post_model_hook"] = post_model_hook
+
+    workflow = create_supervisor(**supervisor_kwargs)
 
     app = workflow.compile(checkpointer=checkpointer)
 

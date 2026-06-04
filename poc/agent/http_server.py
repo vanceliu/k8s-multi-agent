@@ -213,6 +213,40 @@ def create_app(runtime: DeepAgentsRuntime) -> FastAPI:
                         data = json.dumps({"error": event["error"]}, ensure_ascii=False)
                         yield f"event: error\ndata: {data}\n\n"
 
+                    elif event_type == "compaction_start":
+                        data = json.dumps(
+                            {
+                                "session_id": event.get("session_id", req.session_id),
+                                "before_tokens": event.get("before_tokens", 0),
+                                "message_count": event.get("message_count", 0),
+                            },
+                            ensure_ascii=False,
+                        )
+                        yield f"event: compaction_start\ndata: {data}\n\n"
+
+                    elif event_type == "compaction_memory_flush":
+                        data = json.dumps(
+                            {
+                                "session_id": event.get("session_id", req.session_id),
+                                "stored": event.get("stored", 0),
+                            },
+                            ensure_ascii=False,
+                        )
+                        yield f"event: compaction_memory_flush\ndata: {data}\n\n"
+
+                    elif event_type == "compaction_complete":
+                        data = json.dumps(
+                            {
+                                "session_id": event.get("session_id", req.session_id),
+                                "before_tokens": event.get("before_tokens", 0),
+                                "after_tokens": event.get("after_tokens", 0),
+                                "message_count": event.get("message_count", 0),
+                                "memories_flushed": event.get("memories_flushed", 0),
+                            },
+                            ensure_ascii=False,
+                        )
+                        yield f"event: compaction_complete\ndata: {data}\n\n"
+
             except Exception as e:
                 err_name = type(e).__name__
                 if "Recursion" in err_name:

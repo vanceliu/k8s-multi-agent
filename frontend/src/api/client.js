@@ -333,5 +333,51 @@ export function createApiClient({ baseUrl = DEFAULT_BASE_URL, token } = {}) {
       if (!res.ok) throw new ApiError(`Admin channels failed: ${res.status}`, res.status);
       return res.json();
     },
+
+    // 38. Init binding (POST /api/v1/users/bindings/init)
+    async initBinding(platform) {
+      const res = await fetch(`${baseUrl}/api/v1/users/bindings/init`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ platform }),
+      });
+      if (!res.ok) throw new ApiError(`Init binding failed: ${res.status}`, res.status);
+      return res.json();
+    },
+
+    // 39. List bindings (GET /api/v1/users/bindings)
+    async getBindings() {
+      const res = await fetch(`${baseUrl}/api/v1/users/bindings`, {
+        headers: headers(),
+      });
+      if (!res.ok) throw new ApiError(`Get bindings failed: ${res.status}`, res.status);
+      return res.json();
+    },
+
+    // 40. Unbind (DELETE /api/v1/users/bindings/{platform})
+    async unbind(platform) {
+      const res = await fetch(`${baseUrl}/api/v1/users/bindings/${platform}`, {
+        method: 'DELETE',
+        headers: headers(),
+      });
+      if (!res.ok) throw new ApiError(`Unbind failed: ${res.status}`, res.status);
+      return res.json();
+    },
+
+    // 43. LIFF bind account (POST /api/v1/liff/bindaccount)
+    async liffBindAccount({ username, password, lineUserId, lineDisplayName }) {
+      const res = await fetch(`${baseUrl}/api/v1/liff/bindaccount`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username,
+          password,
+          line_user_id: lineUserId,
+          line_display_name: lineDisplayName,
+        }),
+      });
+      if (!res.ok) throw new ApiError(`LIFF bind failed: ${res.status}`, res.status);
+      return res.json();
+    },
   };
 }

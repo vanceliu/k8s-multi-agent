@@ -5,7 +5,7 @@
 | 項目 | 值 |
 |------|-----|
 | Base URL | `http://localhost:8000` (POC) / `https://api.yourdomain.com` (Production) |
-| 認證方式 | Bearer Token（POC: `$POC_STATIC_TOKEN:{user_id}`） |
+| 認證方式 | Bearer Token（POC: `poc-test-token-12345:{user_id}`） |
 | Content-Type | `application/json` |
 | Swagger UI | `http://localhost:8000/docs` |
 
@@ -14,7 +14,7 @@
 所有 API 都需要在 Header 帶上 Bearer Token：
 
 ```
-Authorization: Bearer $POC_STATIC_TOKEN:testuser1
+Authorization: Bearer poc-test-token-12345:testuser1
 ```
 
 Production 環境將改為 JWT / OAuth2。
@@ -45,7 +45,7 @@ Production 環境將改為 JWT / OAuth2。
 ### Admin Service API（透過 Gateway proxy 存取）
 
 > Admin Service 是獨立 Pod（:8090, ClusterIP），前端透過 Gateway proxy（`/api/v1/admin/*`）統一存取。
-> 認證方式：`Authorization: Bearer $POC_ADMIN_TOKEN`
+> 認證方式：`Authorization: Bearer poc-admin-token-12345`
 
 | #  | Method | Endpoint | 說明 |
 |----|--------|----------|------|
@@ -69,15 +69,16 @@ Production 環境將改為 JWT / OAuth2。
 
 | #  | Method | Endpoint | 說明 |
 |----|--------|----------|------|
-| 29 | POST | `/api/v1/workspaces/storage` | 建立 group workspace + PVC（admin only） |
-| 30 | POST | `/api/v1/workspaces/storage/ensure` | 確保 workspace PVC 存在（Orchestrator 呼叫） |
-| 31 | PUT | `/api/v1/workspaces/{wid}/rename` | 修改 workspace 顯示名稱 |
-| 32 | GET | `/api/v1/workspaces/{wid}/storage/files` | 列出 workspace 檔案 |
-| 33 | POST | `/api/v1/workspaces/{wid}/storage/files/upload` | 上傳檔案到 workspace |
-| 34 | GET | `/api/v1/workspaces/{wid}/storage/files/download` | 從 workspace 下載檔案 |
-| 35 | DELETE | `/api/v1/workspaces/{wid}/storage/files` | 刪除 workspace 檔案或目錄 |
-| 36 | POST | `/api/v1/workspaces/{wid}/storage/files/mkdir` | 建立 workspace 目錄 |
-| 37 | GET | `/api/v1/workspaces/{wid}/storage/access` | Workspace 存取權限（workspace members） |
+| 29 | GET | `/api/v1/workspaces/storage` | 列出所有可存取的 workspace（user 或 admin） |
+| 30 | POST | `/api/v1/workspaces/storage` | 建立 group workspace + PVC（admin only） |
+| 31 | POST | `/api/v1/workspaces/storage/ensure` | 確保 workspace PVC 存在（Orchestrator 呼叫） |
+| 32 | PUT | `/api/v1/workspaces/{wid}/rename` | 修改 workspace 顯示名稱 |
+| 33 | GET | `/api/v1/workspaces/{wid}/storage/files` | 列出 workspace 檔案 |
+| 34 | POST | `/api/v1/workspaces/{wid}/storage/files/upload` | 上傳檔案到 workspace |
+| 35 | GET | `/api/v1/workspaces/{wid}/storage/files/download` | 從 workspace 下載檔案 |
+| 36 | DELETE | `/api/v1/workspaces/{wid}/storage/files` | 刪除 workspace 檔案或目錄 |
+| 37 | POST | `/api/v1/workspaces/{wid}/storage/files/mkdir` | 建立 workspace 目錄 |
+| 38 | GET | `/api/v1/workspaces/{wid}/storage/access` | Workspace 存取權限（workspace members） |
 
 ---
 
@@ -1077,11 +1078,11 @@ Admin Service 是獨立的 FastAPI Pod（:8090, ClusterIP），前端透過 Gate
 |------|-----|
 | Base URL | `http://localhost:8000`（與 Gateway 相同） |
 | 路由前綴 | `/api/v1/admin/*` |
-| 認證方式 | Bearer Token（POC: `$POC_ADMIN_TOKEN`） |
+| 認證方式 | Bearer Token（POC: `poc-admin-token-12345`） |
 | Swagger UI（Admin 直連） | `kubectl port-forward svc/admin -n agent-platform 8090:80` → `http://localhost:8090/docs` |
 
 ```
-Authorization: Bearer $POC_ADMIN_TOKEN
+Authorization: Bearer poc-admin-token-12345
 ```
 
 ---
@@ -1369,7 +1370,7 @@ DELETE /api/v1/admin/workspaces/{workspace_id}/members/{user_id}
 
 ```
 DELETE /api/v1/admin/workspaces/{workspace_id}
-Authorization: Bearer $POC_ADMIN_TOKEN
+Authorization: Bearer poc-admin-token-12345
 ```
 
 **說明：** 刪除工作區及所有相關資源。流程：Admin Service → Storage Service（刪除 PVC）→ Orchestrator（刪除 DB 記錄 + K8s Pod/Service）。
@@ -1739,3 +1740,584 @@ GET /api/v1/workspaces/{workspace_id}/storage/access
 5. **檔案路徑**：所有路徑相對於 workspace 根目錄，不需要前綴 `/`
 6. **工作區目錄結構**：`data/`（共用資料）、`memories/`（AI 記憶）、`skills/`、`sessions/{sid}/`（session 專屬工作目錄）
 7. **IM 指令**：在 `/api/v1/chat` 中可使用 `/new`（重置對話）、`/status`（查狀態）、`/help`（說明）
+
+---
+
+## User Bindings API（多平台身份綁定）
+
+使用者帳號與外部 IM 平台（LINE、Slack、Teams）的綁定管理。綁定後可在 IM 平台上直接與 Agent 對話，並接收排程通知。
+
+> 認證方式：一般使用者 token（`poc-test-token-12345:{user_id}`）
+
+### API 總覽
+
+| # | Method | Endpoint | 說明 |
+|---|--------|----------|------|
+| 38 | POST | `/api/v1/users/bindings/init` | 發起綁定（產生驗證碼） |
+| 39 | GET | `/api/v1/users/bindings` | 列出使用者的所有綁定 |
+| 40 | DELETE | `/api/v1/users/bindings/{platform}` | 解除綁定（Web 端） |
+| 41 | POST | `/api/v1/channels/line/webhook` | LINE webhook（系統用，前端不呼叫） |
+
+---
+
+### 38. 發起綁定
+
+產生 6 位數驗證碼，使用者需在 5 分鐘內於 LINE 官方帳號中輸入此驗證碼完成綁定。
+
+```
+POST /api/v1/users/bindings/init
+```
+
+**Request:**
+```json
+{
+  "platform": "line"
+}
+```
+
+| 欄位 | 類型 | 必填 | 說明 |
+|------|------|------|------|
+| platform | string | 是 | 綁定平台：`line` / `slack` / `teams` |
+
+**Response (200 OK):**
+```json
+{
+  "platform": "line",
+  "code": "847291",
+  "expires_in": 300,
+  "instruction": "請在 LINE 官方帳號中輸入此驗證碼完成綁定"
+}
+```
+
+| 欄位 | 說明 |
+|------|------|
+| code | 6 位數驗證碼 |
+| expires_in | 有效秒數（300 = 5 分鐘） |
+| instruction | 使用者提示文字 |
+
+**錯誤處理：**
+- `400` — 不支援的 platform
+- `409` — 該平台已有綁定帳號（需先解綁再重新綁定）
+
+---
+
+### 39. 列出綁定
+
+```
+GET /api/v1/users/bindings
+```
+
+**Response (200 OK):**
+```json
+{
+  "bindings": [
+    {
+      "platform": "line",
+      "platform_uid": "U1234abcd...",
+      "display_name": "Vance Liu",
+      "status": "active",
+      "bound_at": "2026-05-22T03:00:00+00:00"
+    }
+  ]
+}
+```
+
+| 欄位 | 說明 |
+|------|------|
+| platform | 平台名稱 |
+| platform_uid | 平台上的使用者 ID |
+| display_name | 平台上的顯示名稱 |
+| status | `active`（正常）/ `inactive`（使用者封鎖/刪除官方帳號） |
+| bound_at | 綁定時間 |
+
+---
+
+### 40. 解除綁定（Web 端）
+
+```
+DELETE /api/v1/users/bindings/{platform}
+```
+
+| 參數 | 類型 | 必填 | 說明 |
+|------|------|------|------|
+| platform | string | 是 | 路徑參數：`line` / `slack` / `teams` |
+
+**Response (200 OK):**
+```json
+{
+  "status": "unbound",
+  "platform": "line"
+}
+```
+
+**錯誤處理：**
+- `404` — 無此平台的綁定記錄
+
+---
+
+### 前端綁定流程
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  設定頁面 — 帳號綁定                                          │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  LINE                                                       │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ [未綁定]                                             │   │
+│  │                                                     │   │
+│  │  ┌──────────────┐                                   │   │
+│  │  │  綁定 LINE   │  ← 點擊後呼叫 POST /bindings/init │   │
+│  │  └──────────────┘                                   │   │
+│  │                                                     │   │
+│  │ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─  │   │
+│  │ [產生驗證碼後]                                       │   │
+│  │                                                     │   │
+│  │  驗證碼：847291                                      │   │
+│  │  請在 5 分鐘內於 LINE 官方帳號中輸入此驗證碼           │   │
+│  │  ⏱ 4:32                                             │   │
+│  │                                                     │   │
+│  │ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─  │   │
+│  │ [已綁定]                                             │   │
+│  │                                                     │   │
+│  │  ✓ 已綁定：Vance Liu                                │   │
+│  │  綁定時間：2026-05-22                                │   │
+│  │                                                     │   │
+│  │  ┌──────────────┐                                   │   │
+│  │  │  解除綁定    │  ← DELETE /bindings/line           │   │
+│  │  └──────────────┘                                   │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 前端實作範例
+
+```javascript
+// === 綁定流程 ===
+
+// 1. 發起綁定
+async function initBinding(platform) {
+  const resp = await fetch(`${baseUrl}/api/v1/users/bindings/init`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ platform }),
+  });
+
+  if (resp.status === 409) {
+    alert('此平台已有綁定帳號，請先解綁再重新綁定');
+    return;
+  }
+
+  const data = await resp.json();
+  // 顯示驗證碼 UI
+  showVerificationCode(data.code, data.expires_in);
+
+  // 啟動倒數計時
+  startCountdown(data.expires_in);
+
+  // 輪詢綁定狀態（每 3 秒檢查一次）
+  pollBindingStatus(platform);
+}
+
+// 2. 輪詢綁定狀態
+async function pollBindingStatus(platform) {
+  const interval = setInterval(async () => {
+    const resp = await fetch(`${baseUrl}/api/v1/users/bindings`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    const data = await resp.json();
+    const binding = data.bindings.find(b => b.platform === platform);
+
+    if (binding && binding.status === 'active') {
+      clearInterval(interval);
+      showBindingSuccess(binding.display_name);
+    }
+  }, 3000);
+
+  // 5 分鐘後停止輪詢
+  setTimeout(() => {
+    clearInterval(interval);
+    showExpired();
+  }, 300000);
+}
+
+// === 解綁流程 ===
+
+async function unbind(platform) {
+  if (!confirm(`確定要解除 ${platform.toUpperCase()} 綁定嗎？`)) return;
+
+  const resp = await fetch(`${baseUrl}/api/v1/users/bindings/${platform}`, {
+    method: 'DELETE',
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+
+  if (resp.ok) {
+    showUnbindSuccess();
+  }
+}
+
+// === 載入綁定狀態 ===
+
+async function loadBindings() {
+  const resp = await fetch(`${baseUrl}/api/v1/users/bindings`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  const data = await resp.json();
+
+  for (const binding of data.bindings) {
+    renderBinding(binding);
+    // binding.status === 'inactive' 時顯示警告：
+    // "LINE 連線已中斷（使用者封鎖或刪除官方帳號），通知將改為上線時推送"
+  }
+}
+```
+
+### LINE 端操作（使用者在 LINE 上的互動）
+
+| 使用者輸入 | 系統回應 |
+|-----------|---------|
+| 6 位數字（如 `847291`） | 綁定成功 / 驗證碼錯誤或已過期 |
+| `/unbind` | 「確定要解除綁定嗎？請在 60 秒內回覆『確認解綁』」 |
+| `確認解綁` | 「已解除綁定。如需重新綁定，請至 Web 端操作。」 |
+| 一般訊息（已綁定） | 路由到 Agent Pod，回傳 AI 回應 |
+| 一般訊息（未綁定） | 「請先在 Web 端完成帳號綁定」 |
+
+### 狀態說明
+
+| 狀態 | 意義 | 前端顯示建議 |
+|------|------|-------------|
+| `active` | 綁定有效 | ✓ 已綁定 + 顯示名稱 |
+| `inactive` | 使用者封鎖/刪除 LINE 官方帳號 | ⚠ 連線中斷，通知改為上線推送 |
+| （無記錄） | 未綁定 | 顯示「綁定」按鈕 |
+
+---
+
+## LIFF 綁定（LINE 內嵌頁面綁定）
+
+使用 LINE Front-end Framework (LIFF) 在 LINE app 內開啟綁定頁面，使用者輸入系統帳號密碼完成綁定，不需要離開 LINE。
+
+### 架構
+
+```
+Provider（LINE Developers Console）
+  ├── Messaging API Channel（Bot 訊息 + Webhook）
+  └── LINE Login Channel（LIFF app 綁定頁面）
+
+LIFF app:
+  - LIFF ID: 2010184377-zdxRpWV3
+  - LIFF URL: https://liff.line.me/2010184377-zdxRpWV3
+  - Size: Compact（半頁）
+  - Endpoint URL: https://{domain}/liff/bind
+```
+
+### 綁定流程
+
+```
+使用者在 LINE 傳送訊息（未綁定）
+  → Bot 回覆 Flex Message：
+      ┌─────────────────────────┐
+      │  請先綁定帳號            │
+      │                         │
+      │  [開始綁定]              │  ← URI action → LIFF URL
+      └─────────────────────────┘
+  → 使用者點擊「開始綁定」
+  → LINE 內開啟 LIFF 頁面（Compact 半頁）
+      ┌─────────────────────────┐
+      │  帳號綁定                │
+      │                         │
+      │  帳號：[____________]   │
+      │  密碼：[____________]   │
+      │                         │
+      │  [確認綁定]              │
+      └─────────────────────────┘
+  → LIFF SDK 自動取得 LINE userId + displayName
+  → 使用者輸入帳密 → 送到 backend
+  → Backend 驗證帳密 + 建立 binding (user_id ↔ LINE userId)
+  → 頁面顯示「綁定成功！」→ 自動關閉 LIFF
+  → Bot push 訊息：「綁定成功！已連結帳號 XXX，現在可以直接對話了。」
+```
+
+### API 總覽
+
+| # | Method | Endpoint | 說明 |
+|---|--------|----------|------|
+| 42 | GET | `/liff/bind` | LIFF 綁定頁面（靜態 HTML）— **尚未實作** |
+| 43 | POST | `/api/v1/liff/bindaccount` | LIFF 綁定 API（驗證帳密 + 建立 binding） |
+
+---
+
+### 42. LIFF 綁定頁面
+
+```
+GET /liff/bind
+```
+
+靜態 HTML 頁面，不需要認證。包含：
+- LIFF SDK 初始化（`liff.init()`）
+- 取得 LINE profile（`liff.getProfile()` → userId, displayName）
+- 帳密表單
+- 呼叫 `/api/v1/liff/bindaccount` 完成綁定
+
+**LIFF 頁面實作規格：**
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>帳號綁定</title>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <style>
+    body { font-family: -apple-system, sans-serif; padding: 20px; background: #f5f5f5; }
+    .container { max-width: 320px; margin: 0 auto; background: #fff; padding: 24px; border-radius: 12px; }
+    h2 { text-align: center; margin-bottom: 24px; }
+    .form-group { margin-bottom: 16px; }
+    label { display: block; margin-bottom: 4px; font-size: 14px; color: #666; }
+    input { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 16px; box-sizing: border-box; }
+    button { width: 100%; padding: 14px; background: #06C755; color: #fff; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; }
+    button:disabled { background: #ccc; }
+    .status { text-align: center; margin-top: 16px; font-size: 14px; }
+    .error { color: #e74c3c; }
+    .success { color: #06C755; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>帳號綁定</h2>
+    <div id="form-section">
+      <div class="form-group">
+        <label>帳號（User ID）</label>
+        <input type="text" id="username" placeholder="請輸入帳號">
+      </div>
+      <div class="form-group">
+        <label>密碼</label>
+        <input type="password" id="password" placeholder="請輸入密碼">
+      </div>
+      <button id="bind-btn" onclick="doBind()">確認綁定</button>
+    </div>
+    <div id="status" class="status"></div>
+  </div>
+
+  <script>
+    const LIFF_ID = '2010184377-zdxRpWV3';
+    let lineProfile = null;
+
+    async function initLiff() {
+      try {
+        await liff.init({ liffId: LIFF_ID });
+        if (!liff.isLoggedIn()) {
+          liff.login();
+          return;
+        }
+        lineProfile = await liff.getProfile();
+      } catch (e) {
+        showStatus('LIFF 初始化失敗：' + e.message, 'error');
+      }
+    }
+
+    async function doBind() {
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value.trim();
+      if (!username || !password) {
+        showStatus('請填寫帳號和密碼', 'error');
+        return;
+      }
+      if (!lineProfile) {
+        showStatus('無法取得 LINE 資料，請重新開啟', 'error');
+        return;
+      }
+
+      const btn = document.getElementById('bind-btn');
+      btn.disabled = true;
+      btn.textContent = '綁定中...';
+
+      try {
+        const resp = await fetch('/api/v1/liff/bindaccount', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: username,
+            password: password,
+            line_user_id: lineProfile.userId,
+            line_display_name: lineProfile.displayName,
+          }),
+        });
+        const data = await resp.json();
+
+        if (resp.ok && data.success) {
+          showStatus('綁定成功！已連結帳號 ' + data.username, 'success');
+          document.getElementById('form-section').style.display = 'none';
+          // 2 秒後自動關閉 LIFF
+          setTimeout(() => liff.closeWindow(), 2000);
+        } else {
+          showStatus(data.error || '綁定失敗，請確認帳號密碼', 'error');
+          btn.disabled = false;
+          btn.textContent = '確認綁定';
+        }
+      } catch (e) {
+        showStatus('網路錯誤，請稍後再試', 'error');
+        btn.disabled = false;
+        btn.textContent = '確認綁定';
+      }
+    }
+
+    function showStatus(msg, type) {
+      const el = document.getElementById('status');
+      el.textContent = msg;
+      el.className = 'status ' + type;
+    }
+
+    initLiff();
+  </script>
+</body>
+</html>
+```
+
+---
+
+### 43. LIFF 綁定 API
+
+```
+POST /api/v1/liff/bindaccount
+```
+
+不需要 Bearer token（LIFF 頁面無法帶 Gateway token），改用帳密驗證身份。
+
+**Request:**
+```json
+{
+  "username": "testuser1",
+  "password": "user_password",
+  "line_user_id": "U1234abcdef...",
+  "line_display_name": "Vance Liu"
+}
+```
+
+| 欄位 | 類型 | 必填 | 說明 |
+|------|------|------|------|
+| username | string | 是 | 系統帳號（user_id 或 username） |
+| password | string | 是 | 系統密碼（POC: static token 的 prefix） |
+| line_user_id | string | 是 | LIFF SDK 取得的 LINE userId |
+| line_display_name | string | 否 | LINE 顯示名稱 |
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "username": "testuser1",
+  "platform": "line",
+  "message": "綁定成功"
+}
+```
+
+**錯誤 Response (401):**
+```json
+{
+  "success": false,
+  "error": "帳號或密碼錯誤"
+}
+```
+
+**錯誤 Response (409):**
+```json
+{
+  "success": false,
+  "error": "此 LINE 帳號已綁定其他使用者"
+}
+```
+
+**POC 驗證邏輯：**
+- 查詢 `users` 表：`username` 或 `user_id` 匹配
+- 密碼驗證：POC 階段比對 `password == STATIC_TOKEN`（即 `poc-test-token-12345`）
+- Production 改為 bcrypt hash 比對或 OAuth2 token 驗證
+
+**安全考量：**
+- LIFF SDK 保證 `line_user_id` 正確（LINE 平台簽發，無法偽造）
+- 帳密驗證確保只有帳號擁有者能綁定
+- `UNIQUE(platform, platform_uid)` 防止一個 LINE 帳號綁多個 user
+- `UNIQUE(user_id, platform)` 防止一個 user 綁多個 LINE
+
+---
+
+### Bot 未綁定時的 Flex Message
+
+當未綁定的使用者在 LINE 傳送訊息時，Bot 回覆 Flex Message 引導綁定：
+
+```json
+{
+  "type": "flex",
+  "altText": "請先綁定帳號",
+  "contents": {
+    "type": "bubble",
+    "size": "kilo",
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": [
+        {
+          "type": "text",
+          "text": "帳號綁定",
+          "weight": "bold",
+          "size": "lg",
+          "align": "center"
+        },
+        {
+          "type": "text",
+          "text": "請先綁定系統帳號，才能開始使用 AI 助理。",
+          "size": "sm",
+          "color": "#666666",
+          "margin": "md",
+          "wrap": true
+        }
+      ]
+    },
+    "footer": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": [
+        {
+          "type": "button",
+          "action": {
+            "type": "uri",
+            "label": "開始綁定",
+            "uri": "https://liff.line.me/2010184377-zdxRpWV3"
+          },
+          "style": "primary",
+          "color": "#06C755"
+        }
+      ]
+    }
+  }
+}
+```
+
+---
+
+### LIFF 綁定 vs 驗證碼綁定
+
+系統同時支援兩種綁定方式：
+
+| 項目 | LIFF 綁定 | 驗證碼綁定 |
+|------|----------|-----------|
+| 操作位置 | 全程在 LINE 內 | Web 產生碼 → LINE 輸入 |
+| 使用者體驗 | 點按鈕 → 輸入帳密 → 完成 | 開 Web → 取碼 → 切到 LINE → 輸入 |
+| 安全性 | 帳密驗證 + LIFF SDK 保證 LINE 身份 | 驗證碼一次性 + 5 分鐘過期 |
+| 適用場景 | 使用者從 LINE 開始互動 | 使用者從 Web 端主動綁定 |
+| 前置條件 | LINE Login Channel + LIFF app | 無（已實作） |
+
+兩種方式建立的 binding 記錄完全相同（`user_bindings` 表），後續行為一致。
+
+---
+
+### 實作 checklist
+
+- [ ] Gateway 新增 `GET /liff/bind` — 回傳靜態 HTML（LIFF 綁定頁面）
+- [ ] Gateway 新增 `POST /api/v1/liff/bindaccount` — 驗證帳密 + 建立 binding
+- [ ] LINEChannel 未綁定回覆改為 Flex Message（帶「開始綁定」按鈕）
+- [ ] LINE Developers Console LIFF Endpoint URL 設為 `https://{domain}/liff/bind`
+- [ ] 綁定成功後 Bot push 確認訊息

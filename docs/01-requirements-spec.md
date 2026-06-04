@@ -317,7 +317,7 @@
 - **入口策略**：單一公開 Gateway，不建立 per-workspace Ingress
 - **DNS**：Production 需配置 DNS 記錄指向 Gateway（不需要 wildcard）
 - **TLS**：在 Gateway/Ingress 層配置憑證
-- **資料庫**：使用 PostgreSQL 14+（POC 使用 SQLite）
+- **資料庫**：使用 PostgreSQL 14+（POC 與 Production 皆使用 PostgreSQL）
 
 ## 驗收準則
 

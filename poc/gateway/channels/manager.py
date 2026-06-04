@@ -230,7 +230,7 @@ class ChannelManager:
 
     async def _call_agent(self, endpoint: str, session_id: str, message: str) -> dict[str, Any]:
         agent_url = f"http://{endpoint}/api/v1/chat"
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=300.0) as client:
             resp = await client.post(
                 agent_url,
                 json={"message": message, "session_id": session_id},

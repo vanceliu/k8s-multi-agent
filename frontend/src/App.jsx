@@ -4,6 +4,7 @@ import ConnectionPanel from './components/ConnectionPanel';
 import WorkspacePanel from './components/WorkspacePanel';
 import ChatPanel from './components/ChatPanel';
 import FileManager from './components/FileManager';
+import BindingPanel from './components/BindingPanel';
 import AdminPanel from './components/AdminPanel';
 
 const TABS = [
@@ -11,6 +12,7 @@ const TABS = [
   { key: 'workspace', label: '工作區', requiresConnection: true },
   { key: 'chat', label: 'AI 對話', requiresConnection: true },
   { key: 'files', label: '檔案管理', requiresWorkspace: true },
+  { key: 'bindings', label: '帳號綁定', requiresConnection: true },
   { key: 'admin', label: '管理員', requiresAdmin: true },
 ];
 
@@ -108,6 +110,7 @@ function AppContent() {
           {activeTab === 'workspace' && <WorkspacePanel />}
           {activeTab === 'chat' && <ChatPanel />}
           {activeTab === 'files' && <FileManager />}
+          {activeTab === 'bindings' && <BindingPanel />}
           {activeTab === 'admin' && <AdminPanel />}
         </div>
       </main>

@@ -24,10 +24,19 @@ class StorageK8sClient:
     def __init__(self):
         try:
             config.load_incluster_config()
+            # Workaround for kubernetes v36 bug: auth_settings() returns empty dict,
+            # so Authorization header is not sent. Manually inject it.
+            c = client.Configuration.get_default_copy()
+            api_client = client.ApiClient(c)
+            token = c.api_key.get("authorization", "")
+            if token:
+                api_client.default_headers["Authorization"] = token
+            self.core = client.CoreV1Api(api_client=api_client)
+            self.batch = client.BatchV1Api(api_client=api_client)
         except config.ConfigException:
             config.load_kube_config()
-        self.core = client.CoreV1Api()
-        self.batch = client.BatchV1Api()
+            self.core = client.CoreV1Api()
+            self.batch = client.BatchV1Api()
         self.ns = K8S_NAMESPACE
 
     # ── PVC CRUD ─────────────────────────────────────────────────────

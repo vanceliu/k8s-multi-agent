@@ -3,7 +3,12 @@
     "allow": [
       "Bash(git rm *)",
       "Bash(pip3 install *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git filter-repo *)",
+      "Bash(git remote *)",
+      "Bash(awk '{print $NF}')",
+      "Bash(grep -iE '\"[a-zA-Z0-9_+/=-]{16,}\"|=\\\\s*[a-zA-Z0-9]{16,}')"
     ]
   }
 }

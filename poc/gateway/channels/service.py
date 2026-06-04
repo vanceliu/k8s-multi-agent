@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 # Channel registry: name → module:class import path
 _CHANNEL_REGISTRY: dict[str, str] = {
     "web": "poc.gateway.channels.adapters.web:WebChannel",
+    "line": "poc.gateway.channels.adapters.line:LINEChannel",
     # "slack": "poc.gateway.channels.adapters.slack:SlackChannel",
-    # "line": "poc.gateway.channels.adapters.line:LINEChannel",
     # "teams": "poc.gateway.channels.adapters.teams:TeamsChannel",
 }
 

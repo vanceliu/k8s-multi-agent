@@ -25,13 +25,13 @@ kubectl config use-context "kind-$CLUSTER_NAME"
 echo "[2/7] Applying namespace & RBAC..."
 kubectl apply -f "$SCRIPT_DIR/namespace-rbac.yaml"
 
-# 3. Build images
+# 3. Build images (--no-cache ensures config changes are always picked up)
 echo "[3/7] Building images..."
-docker build -t k8s-agent-runtime:latest -f "$PROJECT_ROOT/poc/docker/Dockerfile.agent" "$PROJECT_ROOT"
-docker build -t k8s-orchestrator:latest -f "$PROJECT_ROOT/poc/docker/Dockerfile.orchestrator" "$PROJECT_ROOT"
-docker build -t k8s-gateway:latest -f "$PROJECT_ROOT/poc/docker/Dockerfile.gateway" "$PROJECT_ROOT"
-docker build -t k8s-admin:latest -f "$PROJECT_ROOT/poc/docker/Dockerfile.admin" "$PROJECT_ROOT"
-docker build -t k8s-storage-service:latest -f "$PROJECT_ROOT/poc/docker/Dockerfile.storage" "$PROJECT_ROOT"
+docker build --no-cache -t k8s-agent-runtime:latest -f "$PROJECT_ROOT/poc/docker/Dockerfile.agent" "$PROJECT_ROOT"
+docker build --no-cache -t k8s-orchestrator:latest -f "$PROJECT_ROOT/poc/docker/Dockerfile.orchestrator" "$PROJECT_ROOT"
+docker build --no-cache -t k8s-gateway:latest -f "$PROJECT_ROOT/poc/docker/Dockerfile.gateway" "$PROJECT_ROOT"
+docker build --no-cache -t k8s-admin:latest -f "$PROJECT_ROOT/poc/docker/Dockerfile.admin" "$PROJECT_ROOT"
+docker build --no-cache -t k8s-storage-service:latest -f "$PROJECT_ROOT/poc/docker/Dockerfile.storage" "$PROJECT_ROOT"
 
 # 3.5. Clean up dangling (untagged) images from previous builds
 echo "[3.5/7] Cleaning up dangling images..."
@@ -58,6 +58,9 @@ kubectl apply -f "$SCRIPT_DIR/gateway.yaml"
 kubectl apply -f "$SCRIPT_DIR/admin.yaml"
 kubectl apply -f "$SCRIPT_DIR/storage-service.yaml"
 
+# Force pod recreation (image tag is always 'latest', K8s won't detect content changes)
+kubectl rollout restart deployment/orchestrator deployment/gateway deployment/admin deployment/storage-service -n "$NAMESPACE"
+
 # Wait for pods
 echo "  Waiting for Orchestrator..."
 kubectl wait --for=condition=ready pod -l component=orchestrator -n "$NAMESPACE" --timeout=120s
@@ -83,7 +86,7 @@ echo "Test with:"
 echo "  curl -s http://localhost:8000/health"
 echo ""
 echo "  curl -s -X POST http://localhost:8000/api/v1/workspaces/ensure \\"
-echo "    -H 'Authorization: Bearer \$POC_STATIC_TOKEN:testuser1' \\"
+echo "    -H 'Authorization: Bearer poc-test-token-12345:testuser1' \\"
 echo "    -H 'Content-Type: application/json' \\"
 echo "    -d '{\"session_id\": \"sess-001\"}'"
 echo ""

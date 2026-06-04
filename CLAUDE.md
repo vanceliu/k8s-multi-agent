@@ -52,6 +52,7 @@ Key components:
 - SQLAlchemy + asyncpg / PostgreSQL 14+
 - Kubernetes Python client
 - Docker / Podman + kind (local K8s)
+- PyYAML (structured config)
 
 ## POC Commands
 
@@ -91,7 +92,7 @@ kubectl apply -f poc/k8s/storage-service.yaml
 # 6. Test (Gateway exposed at localhost:8000 via NodePort 30080)
 curl -s http://localhost:8000/health
 curl -s -X POST http://localhost:8000/api/v1/workspaces/ensure \
-  -H "Authorization: Bearer $POC_STATIC_TOKEN:testuser1" \
+  -H "Authorization: Bearer poc-test-token-12345:testuser1" \
   -H "Content-Type: application/json" \
   -d '{"session_id": "sess-001"}'
 
@@ -138,6 +139,7 @@ poc/
     main.py                        # Agent 容器入口（asyncio + signal handling）
     config.py                      # AgentConfig dataclass（env vars）
     runtime.py                     # DeepAgentsRuntime（Supervisor + Sub-Agent: research_agent + code_agent）
+    model_factory.py               # ModelFactory（per-model LLM 初始化 + output normalizer + post_model_hook）
     middleware.py                  # SkillsInjectionMiddleware（flat agent fallback 用，supervisor 透過 session context 注入）
     http_server.py                 # FastAPI HTTP 層（chat/mcp/shutdown/files CRUD）
     tools.py                       # 工具分組（research_tools, code_tools, common_tools）+ LoggingSearchTool + CWAWeatherTool
@@ -147,12 +149,18 @@ poc/
       pdf/SKILL.md                 # PDF 文件產生
       pptx/SKILL.md                # PowerPoint 簡報產生
       xlsx/SKILL.md                # Excel 試算表產生
+    compaction/                    # Context Compaction 模組（自動對話壓縮）
+      __init__.py                  # 公開介面：ContextCompactor, TokenCounter
+      counter.py                   # Token 估算 + context window 對照表
+      compactor.py                 # 壓縮核心邏輯（memory flush + summarize + rebuild）
+      prompts.py                   # Memory flush + summarize prompt 模板
     backends/
       local.py                     # LocalBackend — PVC 本地檔案操作（session-aware 寫入權限）
   db/
     models.py                      # 6 張表 ORM（含 workspace_members，POC 版）
     session.py                     # PostgreSQL async session
-  utils/config.py                  # 設定 (env vars, 含 CWA_API_KEY/CWA_API_BASE/AGENT_DISPLAY_MODE)
+  utils/config.py                  # 設定（YAML + env vars 覆蓋，含 CWA_API_KEY/CWA_API_BASE/AGENT_DISPLAY_MODE）
+  config.yaml                      # 結構化預設配置檔（env vars 優先覆蓋）
   docker/
     Dockerfile.agent               # Agent 鏡像
     Dockerfile.orchestrator        # Orchestrator 鏡像
@@ -171,12 +179,14 @@ poc/
     e2e_test.sh                    # 基本端對端測試
     e2e_admin_test.sh              # Admin Service 端對端測試
     e2e_storage_test.sh            # Storage Service 端對端測試
+    test_memory_service.py         # Memory Service 單元測試
+    test_compaction.py             # Context Compaction 單元測試
   requirements.txt
 ```
 
 ## Design Documents
 
-All under `docs/`, numbered 01-10. These are the source of truth for production implementation:
+All under `docs/`, numbered 01-13. These are the source of truth for production implementation:
 - **01** Requirements spec (functional + non-functional)
 - **02** API design (HTTP endpoints, internal RPC, agent container API)
 - **03** Data model (7 PostgreSQL tables including workspace_members, K8s resource naming conventions)
@@ -187,6 +197,9 @@ All under `docs/`, numbered 01-10. These are the source of truth for production 
 - **08** Fault recovery (error classification, retry strategies, DRP)
 - **09** Agent tools (tool groups, sandbox, CWA weather, how to add new tools)
 - **10** Scheduler Service (scheduled tasks, cron expressions, notification channels, tool risk levels) — Draft
+- **11** Memory System (SQLite FTS5 indexed workspace memory, Active Memory auto-recall)
+- **12** Context Compaction (automatic conversation history compression, memory flush before summarization)
+- **13** User Bindings (多平台身份綁定：LINE/Slack/Teams，驗證碼綁定流程，unfollow 自動 inactive + follow 自動恢復)
 
 ## Key Design Decisions
 
@@ -206,7 +219,7 @@ All under `docs/`, numbered 01-10. These are the source of truth for production 
 - Agent graceful shutdown: preStop hook → drain active requests → save state to PVC → close connections (Production: save to S3)
 - NetworkPolicy restricts Agent Pods to only accept traffic from Gateway and Storage Service; Orchestrator accepts traffic from Gateway, Admin, Storage Service, and Agent (for idle reap-self); Storage Service accepts traffic from Gateway, Orchestrator, and Admin
 - IM Channel abstraction layer (inspired by deer-flow): all chat messages normalized into InboundMessage/OutboundMessage, routed through async MessageBus, dispatched by ChannelManager — decouples IM platforms from Agent logic
-- Channel adapters are pluggable: `web` (built-in), `slack`/`line`/`teams` (registry stubs ready)
+- Channel adapters are pluggable: `web` (built-in)、`line` (已實作)、`slack`/`teams` (尚未實作)
 - Web channel uses request-response pattern via asyncio.Future; other channels will use webhook/websocket patterns
 - ChannelStore persists chat→workspace/session mappings (JSON file for POC, DB for production)
 - `/api/v1/chat` (channel-based) is the recommended frontend endpoint; `/workspaces/{wid}/api/v1/chat` (direct proxy) remains for backward compatibility
@@ -222,16 +235,25 @@ All under `docs/`, numbered 01-10. These are the source of truth for production 
 - Same-name skill dedup: higher priority source wins, lower priority skipped
 - Per-session agent cache with session-scoped tools: model + checkpointer shared, supervisor workflow created per-session with cwd = `sessions/{session_id}/`
 - Supervisor + Sub-Agent 架構（langgraph-supervisor）：Supervisor 負責理解需求、分派任務、整合結果；research_agent 專責搜尋（rate-limited, max 3 calls）；code_agent 專責執行（terminal + python_repl）。Skills metadata 透過 session context message 動態注入。若 langgraph-supervisor 不可用，fallback 到 create_agent + SkillsInjectionMiddleware
+- ModelFactory（strategy pattern）：根據 model name 分派到對應的 `_create_xxx` 方法，回傳 (model, normalizer) tuple。支援 MiniMax、DeepSeek、GLM、Claude、OpenAI。新增模型只需加一個 method + elif
+- Model output normalization 三層統一：(1) streaming 用 normalizer 即時過濾 token (2) 同步 invoke 用 `normalize_complete` 處理完整回應 (3) `post_model_hook` 在存入 checkpointer 前清理 content，history 讀取不需額外處理
+- Configuration: YAML 預設值 (`poc/config.yaml`) + 環境變數覆蓋（env vars 優先），K8s 部署用 ConfigMap/Secret 注入 env vars，本地開發改 YAML
+- Context Compaction: 對話超過 model context window 75% 時自動觸發壓縮，壓縮前先 Silent Memory Flush（LLM 提取重要資訊存入 MemoryService），再 Summarize 舊訊息為摘要，保留最近 6 輪完整對話。兩階段可並行執行。Checkpoint 原始資料不修改（完整歷史仍可查詢），僅在送入 LLM 前裁剪
+- User Bindings: 多平台身份綁定（`user_bindings` 表），必須先有系統帳號才能綁定 IM 平台，一個 user 在同一平台只能綁一個帳號（UNIQUE(user_id, platform)），一個平台帳號只能綁一個 user（UNIQUE(platform, platform_uid)）
+- 綁定流程：Web 端發起產生 6 位數驗證碼（5 分鐘有效）→ 使用者在 LINE 輸入驗證碼 → 系統比對後建立綁定
+- 解綁：Web 端直接操作；LINE 端 `/unbind` 需二次確認（60 秒內回覆「確認解綁」）
+- LINE unfollow 處理：收到 unfollow event → 標記 binding status = 'inactive'（不刪除）→ 通知 fallback 到 pull 模式；重新加好友（follow event）→ 自動恢復為 active，不需重新驗證
+- Scheduler 推播透過 `user_bindings` 表動態查詢目標（不在 notification_config 存 platform_uid），使用者換綁帳號後排程通知自動跟著走
 
 ## POC Simplifications (vs Production Design)
 
 | 項目 | POC | Production |
 |------|-----|------------|
-| 認證 | Static token (env var `POC_STATIC_TOKEN`) | JWT / OAuth2 |
+| 認證 | Static token (`poc-test-token-12345:{user_id}`) | JWT / OAuth2 |
 | 資料庫 | PostgreSQL (asyncpg) | PostgreSQL 14+ + Alembic migrations |
 | K8s 環境 | kind + Podman | EKS / GKE / AKS |
 | Agent 容器 | create_supervisor + create_react_agent（research_agent + code_agent）+ LocalBackend (PVC)，fallback: create_agent + SkillsInjectionMiddleware | LangChain Deep Agents + S3Backend + PostgresSaver |
-| LLM | Local LLM via OPENAI_API_BASE | Anthropic / OpenAI API |
+| LLM | ModelFactory（strategy pattern）+ YAML config，支援 MiniMax/DeepSeek/GLM/OpenAI/Claude via OPENAI_API_BASE | Anthropic / OpenAI API |
 | 閒置超時 | 10 分鐘 | 30 分鐘 |
 | 儲存 | PVC（personal 掛載 `/workspace/{wid}`，shared 掛載 `/shared/{wid}`） | AWS S3（透過 IRSA + S3Backend） |
 | 工作區結構 | `data/`, `memories/`, `skills/`, `sessions/{sid}/` | 同左（S3 prefix） |
@@ -241,14 +263,16 @@ All under `docs/`, numbered 01-10. These are the source of truth for production 
 | Workspace 類型 | personal（使用者登入自動建立）/ group（Admin 預建），Pod 掛載 personal PVC + 所有 group PVC | 同左 |
 | 存取控制 | workspace_members 表（owner/admin/member/readonly），Admin Service 管理 | 同左 + JWT role claim |
 | 路由 key | workspace_id | 同左 |
-| DB 表 | 6 張（users, workspaces, sessions, activity_logs, pod_states, workspace_members） | 7 張（含 workspace_members，無 pod_states） |
-| IM Channel | WebChannel only | + Slack / LINE / Teams adapters |
+| DB 表 | 6 張（users, workspaces, sessions, activity_logs, pod_states, workspace_members）+ user_bindings, binding_verifications | 7 張（含 workspace_members，無 pod_states）+ user_bindings |
+| IM Channel | WebChannel + LINEChannel | + Slack / Teams adapters |
+| 身份綁定 | user_bindings 表 + 驗證碼綁定流程（LINE only） | 同左 + Slack OAuth + Teams OAuth |
 | Checkpointer | AsyncPostgresSaver (PostgreSQL, 對話跨 Pod 重啟保留) | 同左 |
 | 長期記憶 | 無 | AsyncPostgresStore (LangGraph Store) |
+| Context Compaction | TokenCounter 估算 + ContextCompactor（memory flush + summarize），壓縮後更新 checkpoint | 同左 + tiktoken 精確計數 |
 | Skills | 5 個 bundled skills（daily-summary, docx, pdf, pptx, xlsx），三層優先級載入（shared > bundled > workspace） | 同左 + 管理介面 |
 | 檔案操作 | Storage Service 雙模式（Pod 在線 proxy / 離線 K8s Job），`/api/v1/workspaces/{wid}/storage/files/*` | 同左（S3 presigned URL） |
 | 部署方式 | 全部容器化，五元件皆在 K8s 內（Gateway, Orchestrator, Admin, Storage Service, Agent） | 同左 + Helm chart |
-| Admin 認證 | Static admin token (env var `POC_ADMIN_TOKEN`) | JWT + admin role + IP 白名單 |
+| Admin 認證 | Static admin token (`poc-admin-token-12345`) | JWT + admin role + IP 白名單 |
 | 監控/TLS/Helm | 無 | Prometheus, TLS, Helm chart |
 
 ## Implementation Status
@@ -266,8 +290,11 @@ All under `docs/`, numbered 01-10. These are the source of truth for production 
 - **Admin Service (已完成)**: 獨立 Pod (:8090, ClusterIP), Gateway proxy `/api/v1/admin/*` 統一入口, user CRUD, workspace 列表/查詢/刪除, workspace_members 角色管理 (owner/admin/member/readonly), Pod 狀態總覽（K8s 即時查詢）, reap 觸發, workspace 刪除（Storage Service 刪 PVC → Orchestrator 刪 DB + K8s）, 透過 Orchestrator + Storage Service API 操作（不直接碰 K8s）, POC admin token 雙層驗證（Gateway + Admin Service）
 - **Storage Service (已完成)**: 獨立 Pod (:8091, ClusterIP), Gateway proxy `/api/v1/workspaces/storage/*` 和 `/api/v1/workspaces/{wid}/storage/*`, workspace storage CRUD（create/ensure/rename/刪除/列表）, Admin 可預建 group workspace + PVC, 檔案操作雙模式（Pod 在線 proxy Agent / 離線 K8s Job）, 存取權限（workspace_members）, user token + admin token 雙模式認證, display_name 支援
 - **Multi-Workspace (已完成)**: workspace_type（personal/group）, Admin 預建 group workspace, 使用者 Pod 自動掛載 personal PVC (`/workspace/{wid}`) + 所有 group PVC (`/shared/{wid}`), readonly role 強制 K8s 層級 read-only mount, Pod 重建時自動更新掛載
+- **ModelFactory + Config YAML (已完成)**: YAML 預設配置 + env vars 覆蓋, ModelFactory strategy pattern（MiniMax/DeepSeek/GLM/Claude/OpenAI）, ThinkingStripNormalizer（streaming + sync + post_model_hook 三層統一）, checkpointer 存儲乾淨 content
+- **Context Compaction (已完成)**: 自動對話壓縮（TokenCounter 估算 + ContextCompactor），觸發條件：token 數超過 model context window 75% 且訊息數 ≥ 20，壓縮前 Silent Memory Flush（LLM 提取重要資訊存入 MemoryService），Summarize 舊訊息為摘要，保留最近 6 輪完整對話，SSE events: `compaction_start`/`compaction_memory_flush`/`compaction_complete`（3 個進度事件），29 個單元測試通過
 - **Scheduler Service (設計完成，未開始)**: 排程服務設計文件（Draft），定時任務、cron 表達式、通知管道、工具風險分級
+- **User Bindings (設計完成，未開始)**: 多平台身份綁定（LINE/Slack/Teams），`user_bindings` + `binding_verifications` 表，驗證碼綁定流程，unfollow 自動 inactive + follow 自動恢復，雙向解綁（Web 直接 / LINE 二次確認），Scheduler 推播透過 binding 查詢目標
 - **Phase 1 (未開始)**: Production Orchestrator + PostgreSQL + Alembic migrations
 - **Phase 2 (設計完成，未開始)**: LangChain Deep Agents container + FastAPI HTTP layer + MCP compatibility
-- **Phase 3 (未開始)**: Production API Gateway + JWT/OAuth2 + Slack/LINE/Teams channel adapters
+- **Phase 3 (未開始)**: Production API Gateway + JWT/OAuth2 + Slack/Teams channel adapters
 - **Phase 4 (未開始)**: Helm, monitoring, TLS, load testing
